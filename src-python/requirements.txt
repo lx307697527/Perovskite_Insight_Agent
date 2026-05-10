@@ -1,0 +1,30 @@
+docling
+pdfplumber
+PyPDF2
+sqlalchemy
+python-dotenv
+pyinstaller
+pandas
+openpyxl
+beautifulsoup4
+requests
+fastapi
+uvicorn
+openai
+httpx>=0.25.0
+sse-starlette>=1.8.0
+cryptography>=42.0.0
+pint>=0.23
+faiss-cpu>=1.7.4
+sentence-transformers>=2.6.0
+huggingface-hub>=0.22.0
+PyMuPDF
+
+# OCR Engines (optional - for scanned PDF support)
+# Note: PaddleOCR requires Python 3.8-3.12, not compatible with Python 3.14
+# To use PaddleOCR, create a separate Python 3.11 environment:
+#   conda create -n ocr python=3.11
+#   conda activate ocr
+#   pip install paddleocr paddlepaddle
+#
+# Current fallback: RapidOCR (included via docling dependencies)

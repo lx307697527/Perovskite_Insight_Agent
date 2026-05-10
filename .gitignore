@@ -1,0 +1,40 @@
+# IDE
+.vscode/
+.idea/
+
+# Node
+node_modules/
+dist/
+dist-tauri/
+
+# Python
+__pycache__/
+.venv/
+venv/
+*.pyc
+*.pyo
+*.pyd
+build/
+dist_python/
+*.spec
+
+# Tauri
+src-tauri/target/
+src-tauri/binaries/
+
+# App Data
+storage.db
+cache/
+.env
+
+# Sensitive Config
+src-python/config.json
+*.log
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.Python
+venv/
+env/

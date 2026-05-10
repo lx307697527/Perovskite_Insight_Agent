@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npm uninstall *)",
+      "Bash(npm update *)",
+      "Bash(npm audit *)",
+      "PowerShell(Get-ChildItem -Path \"d:\\\\Code_Space\\\\Perovskite_Insight_Agent\" -Recurse -File | Where-Object { $_.FullName -notmatch 'node_modules|__pycache__|\\\\.git' } | Sort-Object LastWriteTime -Descending | Select-Object Name, LastWriteTime -First 25)",
+      "Bash(python -m pytest tests/test_backend_fixes.py -v --tb=short)",
+      "Bash(python -m pytest tests/test_backend_fixes.py -v --tb=short -s)",
+      "Bash(pip install *)",
+      "Bash(python -c \"from core.pdf_engine import pdf_processor; print\\('PDF Engine loaded successfully'\\)\")",
+      "WebSearch",
+      "Bash(dir /s /b \"d:\\\\Code_Space\\\\Perovskite_Insight_Agent\\\\src-python\")"
+    ]
+  }
+}
