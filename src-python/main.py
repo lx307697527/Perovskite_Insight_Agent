@@ -21,6 +21,7 @@ from core.exporter import exporter
 from core.crawler import crawler
 from core.translator import translator
 from core.security import decrypt_settings, encrypt_settings, needs_migration, migrate_from_plaintext
+from core.model_manager import start_background_load
 
 # ============================================================
 # App bootstrap
@@ -53,6 +54,9 @@ if not current_config:
 
 extractor.update_config(current_config)
 translator.update_config(current_config)
+
+# Start embedding model background loading
+start_background_load()
 
 # CORS
 app.add_middleware(

@@ -4,7 +4,7 @@ import { useAppStore } from './store';
 
 const App: React.FC = () => {
   const location = useLocation();
-  const { sidebarOpen, toggleSidebar, comparisonDois } = useAppStore();
+  const { sidebarOpen, toggleSidebar, comparisonDois, toast, clearToast } = useAppStore();
 
   const navItems = [
     { path: '/home', label: '首页', icon: '🏠' },
@@ -65,9 +65,23 @@ const App: React.FC = () => {
         <Outlet />
       </main>
 
+      {/* Toast */}
+      {toast && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[300] animate-in slide-in-from-top-4 duration-300" onClick={clearToast}>
+          <div className={`px-6 py-3 rounded-2xl border shadow-2xl flex items-center gap-3 cursor-pointer ${
+            toast.type === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-400' :
+            toast.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
+            'bg-brand-500/10 border-brand-500/30 text-brand-400'
+          }`}>
+            <span className="text-xs font-bold">{toast.message}</span>
+            <button type="button" className="text-current opacity-50 hover:opacity-100 ml-2" onClick={clearToast}>x</button>
+          </div>
+        </div>
+      )}
+
       {/* Footer / Status Bar */}
       {location.pathname !== '/onboarding' && (
-        <footer className="fixed bottom-0 w-full p-3 border-t border-white/5 bg-black/20 backdrop-blur-md flex justify-between items-center text-xs text-slate-500 px-8">
+        <footer className="fixed bottom-0 w-full p-3 border-t border-white/5 bg-black/20 backdrop-blur-md flex justify-between items-center text-xs text-slate-500 px-8 z-30">
           <div>SIA v2.1 | Sci-Insight Agent</div>
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-1">

@@ -31,6 +31,19 @@ interface AppState {
   // Selected literature for detail view
   selectedDoi: string | null;
   setSelectedDoi: (doi: string | null) => void;
+
+  // Projects
+  projects: Project[];
+  setProjects: (projects: Project[]) => void;
+
+  // Inbox
+  inboxItems: Literature[];
+  setInboxItems: (items: Literature[]) => void;
+
+  // Toast
+  toast: { message: string; type: 'info' | 'error' | 'success' } | null;
+  showToast: (message: string, type?: 'info' | 'error' | 'success') => void;
+  clearToast: () => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -66,4 +79,17 @@ export const useAppStore = create<AppState>((set) => ({
 
   selectedDoi: null,
   setSelectedDoi: (doi) => set({ selectedDoi: doi }),
+
+  projects: [],
+  setProjects: (projects) => set({ projects }),
+
+  inboxItems: [],
+  setInboxItems: (items) => set({ inboxItems: items }),
+
+  toast: null,
+  showToast: (message, type = 'info') => {
+    set({ toast: { message, type } });
+    setTimeout(() => set({ toast: null }), 3500);
+  },
+  clearToast: () => set({ toast: null }),
 }));
