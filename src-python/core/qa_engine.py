@@ -2,11 +2,18 @@
 Precision Q&A Engine for SIA V2.1.
 
 FAISS-based RAG pipeline:
-1. Load paper markdown → chunk into 512-token paragraphs
+1. Load paper markdown (main + SI) → chunk into 512-token paragraphs
 2. Embed chunks via BGE-base-en-v1.5
 3. Build FAISS index for cosine similarity search
 4. Given a question: embed → top-k retrieval → LLM answer with source tracking
 5. Persist FAISS index to disk for reuse
+
+V2.1 improvements over V1:
+- Paragraph-level chunking (respects sentence/page boundaries)
+- SI content included in the FAISS index
+- Multiple source citations per answer
+- Proper async-only index building (no broken sync path)
+- Integration with smart_slicer for SI chunking
 """
 
 import os
@@ -15,11 +22,13 @@ import uuid
 import logging
 import datetime
 import threading
+import re
 from typing import Optional
 
 from . import model_manager
 from .database import SessionLocal, Literature, QuickQuestion
 from .pdf_engine import pdf_processor
+from .smart_slicer import slice_si
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +48,7 @@ _active_qa_lock = threading.Lock()
 CHUNK_SIZE = 512  # tokens
 CHUNK_OVERLAP = 64  # tokens
 TOP_K = 5  # retrieval count
+MIN_RELEVANCE_SCORE = 0.3  # minimum cosine similarity to include as source
 
 
 def _estimate_tokens(text: str) -> int:
@@ -48,18 +58,29 @@ def _estimate_tokens(text: str) -> int:
     return chinese_chars // 2 + other_chars // 4
 
 
+def _split_into_sentences(text: str) -> list[str]:
+    """Split text into sentences, preserving whitespace for reconstruction."""
+    # Match sentence-ending punctuation followed by space or end
+    parts = re.split(r'(?<=[.!?。！？])\s+', text)
+    return [p for p in parts if p.strip()]
+
+
 def _chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[dict]:
     """Split text into overlapping chunks with page tracking.
-    Returns list of {text, page, char_start, char_end}.
+
+    Uses paragraph-level chunking that respects sentence boundaries
+    and tracks page numbers from pdf_engine markers (--- PAGE N ---).
+
+    Returns list of {text, page, char_start, char_end, source}.
     """
     if not text:
         return []
 
     # Split by page markers (from pdf_engine: "--- PAGE N ---")
-    import re
     pages = re.split(r'---\s*PAGE\s+(\d+)\s*---', text)
 
-    chunks = []
+    # Collect all paragraphs with their page numbers
+    paragraphs: list[dict] = []
     current_page = 1
 
     # pages: [before_first_marker, page_num, content, page_num, content, ...]
@@ -76,55 +97,235 @@ def _chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OV
         if not page_text:
             continue
 
-        # Further split long page content into chunks
-        words = page_text.split()
-        if not words:
-            continue
+        # Split by double newline (paragraph boundaries)
+        for para in page_text.split('\n\n'):
+            para = para.strip()
+            if para:
+                paragraphs.append({
+                    "text": para,
+                    "page": current_page,
+                    "tokens": _estimate_tokens(para),
+                })
 
-        pos = 0
-        while pos < len(words):
-            chunk_words = words[pos:pos + chunk_size]
-            chunk_text = ' '.join(chunk_words)
+    # Group paragraphs into chunks of ~chunk_size tokens
+    chunks: list[dict] = []
+    current_chunk_paras: list[dict] = []
+    current_tokens = 0
+    current_page = 1
+
+    for para in paragraphs:
+        para_tokens = para["tokens"]
+
+        # If adding this paragraph exceeds chunk_size and we already have content,
+        # finalize the current chunk
+        if current_chunk_paras and current_tokens + para_tokens > chunk_size:
+            chunk_text = "\n\n".join(p["text"] for p in current_chunk_paras)
             chunks.append({
                 "text": chunk_text,
                 "page": current_page,
                 "char_start": 0,
                 "char_end": len(chunk_text),
+                "source": "main",
             })
-            pos += chunk_size - overlap
+
+            # Overlap: keep last few paragraphs that fit in overlap budget
+            overlap_paras: list[dict] = []
+            overlap_tokens = 0
+            for p in reversed(current_chunk_paras):
+                if overlap_tokens + p["tokens"] > overlap:
+                    break
+                overlap_paras.insert(0, p)
+                overlap_tokens += p["tokens"]
+
+            current_chunk_paras = overlap_paras
+            current_tokens = overlap_tokens
+
+        if not current_chunk_paras:
+            current_page = para["page"]
+
+        current_chunk_paras.append(para)
+        current_tokens += para_tokens
+
+    # Final chunk
+    if current_chunk_paras:
+        chunk_text = "\n\n".join(p["text"] for p in current_chunk_paras)
+        chunks.append({
+            "text": chunk_text,
+            "page": current_page,
+            "char_start": 0,
+            "char_end": len(chunk_text),
+            "source": "main",
+        })
 
     return chunks
 
 
-def _get_or_build_index(doi: str) -> Optional[tuple]:
-    """Get or build FAISS index for a paper. Returns (index, chunks) or None."""
-    # Check in-memory cache
+def _chunk_si_text(si_text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[dict]:
+    """Chunk SI content using smart_slicer, then further split into token-limited chunks.
+
+    Returns chunks with source="si" and section metadata.
+    """
+    if not si_text:
+        return []
+
+    slices = slice_si(si_text, max_chunk_tokens=chunk_size, overlap_tokens=overlap)
+    chunks: list[dict] = []
+
+    for s in slices:
+        # The smart_slicer already produces reasonably-sized chunks,
+        # but we may need to further split very large ones
+        text = s.content
+        tokens = _estimate_tokens(text)
+
+        if tokens <= chunk_size * 1.5:
+            chunks.append({
+                "text": text,
+                "page": 0,  # SI pages tracked separately
+                "char_start": s.start_char,
+                "char_end": s.end_char,
+                "source": "si",
+                "section": s.section_title,
+                "has_table": s.has_table,
+            })
+        else:
+            # Split large SI slices into smaller chunks
+            sub_chunks = _chunk_text(text, chunk_size, overlap)
+            for sc in sub_chunks:
+                sc["source"] = "si"
+                sc["section"] = s.section_title
+                sc["has_table"] = s.has_table
+                chunks.append(sc)
+
+    return chunks
+
+
+def _load_cached_index(doi: str) -> Optional[tuple]:
+    """Try to load a persisted FAISS index from disk. Returns (index, chunks) or None."""
+    safe_doi = doi.replace('/', '_')
+    lit_index_path = os.path.join(_FAISS_DIR, "literature", f"{safe_doi}.faiss")
+    meta_path = os.path.join(_FAISS_DIR, "literature", f"{safe_doi}.json")
+
+    if not (os.path.exists(lit_index_path) and os.path.exists(meta_path)):
+        return None
+
+    try:
+        import faiss
+        index = faiss.read_index(lit_index_path)
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            chunks = json.load(f)
+        return (index, chunks)
+    except Exception as e:
+        logger.warning(f"Failed to load cached index for {doi}: {e}")
+        return None
+
+
+def _persist_index(doi: str, index, chunks: list[dict]):
+    """Persist FAISS index and chunk metadata to disk."""
+    safe_doi = doi.replace('/', '_')
+    lit_dir = os.path.join(_FAISS_DIR, "literature")
+    os.makedirs(lit_dir, exist_ok=True)
+
+    try:
+        import faiss
+        faiss.write_index(index, os.path.join(lit_dir, f"{safe_doi}.faiss"))
+        with open(os.path.join(lit_dir, f"{safe_doi}.json"), 'w', encoding='utf-8') as f:
+            json.dump(chunks, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"Failed to persist FAISS index for {doi}: {e}")
+
+
+async def _get_paper_markdown(doi: str, lit: Literature) -> tuple[str, str]:
+    """Get markdown content for main text and SI.
+
+    Returns (main_markdown, si_markdown).
+    """
+    main_markdown = ""
+    si_markdown = ""
+
+    # Main text
+    if lit.local_pdf_path and os.path.exists(lit.local_pdf_path):
+        main_markdown = await pdf_processor.convert_to_markdown(lit.local_pdf_path)
+
+    # SI: check for SI file paths
+    si_paths = []
+    if lit.si_paths:
+        try:
+            si_paths = json.loads(lit.si_paths)
+        except Exception:
+            pass
+
+    # Also check for SIFile records in DB
+    if not si_paths:
+        from .database import SIFile
+        db = SessionLocal()
+        try:
+            si_files = db.query(SIFile).filter(
+                SIFile.literature_doi == doi,
+                SIFile.status == "ready",
+            ).all()
+            si_paths = [sf.local_path for sf in si_files if sf.local_path and os.path.exists(sf.local_path)]
+        finally:
+            db.close()
+
+    for si_path in si_paths:
+        if isinstance(si_path, str) and os.path.exists(si_path):
+            try:
+                si_content = await pdf_processor.convert_to_markdown(si_path)
+                if si_content:
+                    si_markdown += si_content + "\n\n"
+            except Exception as e:
+                logger.warning(f"Failed to parse SI file {si_path}: {e}")
+
+    return main_markdown, si_markdown
+
+
+def _build_fallback_text(lit: Literature) -> str:
+    """Build fallback text from DB fields when PDF is unavailable."""
+    parts = []
+    if lit.title:
+        parts.append(f"Title: {lit.title}")
+    if lit.abstract:
+        parts.append(f"Abstract: {lit.abstract}")
+    if lit.performance_data:
+        try:
+            perf = json.loads(lit.performance_data)
+            parts.append(f"Performance: {json.dumps(perf, ensure_ascii=False)}")
+        except Exception:
+            parts.append(f"Performance: {lit.performance_data}")
+    if lit.process_params:
+        try:
+            proc = json.loads(lit.process_params)
+            parts.append(f"Process: {json.dumps(proc, ensure_ascii=False)}")
+        except Exception:
+            parts.append(f"Process: {lit.process_params}")
+    if lit.source_mapping:
+        try:
+            mapping = json.loads(lit.source_mapping)
+            parts.append(f"Evidence: {json.dumps(mapping, ensure_ascii=False)}")
+        except Exception:
+            parts.append(f"Evidence: {lit.source_mapping}")
+    return "\n\n".join(parts)
+
+
+async def build_index_async(doi: str) -> Optional[tuple]:
+    """Build FAISS index from paper content (main + SI).
+
+    Uses async PDF parsing and includes SI content via smart_slicer.
+    Returns (faiss_index, chunks_metadata) or None on failure.
+    """
+    # Check in-memory cache first
     with _cache_lock:
         if doi in _index_cache:
             return _index_cache[doi]
 
     # Check disk cache
-    lit_index_path = os.path.join(_FAISS_DIR, "literature", f"{doi.replace('/', '_')}.faiss")
-    meta_path = os.path.join(_FAISS_DIR, "literature", f"{doi.replace('/', '_')}.json")
+    cached = _load_cached_index(doi)
+    if cached is not None:
+        with _cache_lock:
+            _index_cache[doi] = cached
+        return cached
 
-    if os.path.exists(lit_index_path) and os.path.exists(meta_path):
-        try:
-            import faiss
-            index = faiss.read_index(lit_index_path)
-            with open(meta_path, 'r', encoding='utf-8') as f:
-                chunks = json.load(f)
-            with _cache_lock:
-                _index_cache[doi] = (index, chunks)
-            return (index, chunks)
-        except Exception as e:
-            logger.warning(f"Failed to load cached index for {doi}: {e}")
-
-    # Build new index
-    return _build_index(doi)
-
-
-def _build_index(doi: str) -> Optional[tuple]:
-    """Build FAISS index from paper content."""
+    # Build from scratch
     db = SessionLocal()
     try:
         lit = db.query(Literature).filter(Literature.doi == doi).first()
@@ -133,34 +334,29 @@ def _build_index(doi: str) -> Optional[tuple]:
             return None
 
         # Get markdown content
-        markdown = ""
-        if lit.local_pdf_path and os.path.exists(lit.local_pdf_path):
-            import asyncio
-            markdown = asyncio.get_event_loop().run_until_complete(
-                pdf_processor.convert_to_markdown(lit.local_pdf_path)
-            ) if not _is_running_async() else None
+        main_markdown, si_markdown = await _get_paper_markdown(doi, lit)
 
-        # Fallback: use cached process_params / source_mapping text
-        if not markdown:
-            combined = []
-            if lit.abstract:
-                combined.append(lit.abstract)
-            if lit.performance_data:
-                combined.append(f"Performance: {lit.performance_data}")
-            if lit.process_params:
-                combined.append(f"Process: {lit.process_params}")
-            if lit.source_mapping:
-                combined.append(f"Evidence: {lit.source_mapping}")
-            markdown = "\n\n".join(combined)
+        # Fallback if no markdown available
+        if not main_markdown:
+            main_markdown = _build_fallback_text(lit)
 
-        if not markdown:
+        if not main_markdown:
             logger.warning(f"No content available for {doi}")
             return None
 
-        chunks = _chunk_text(markdown)
+        # Chunk main text with page tracking
+        chunks = _chunk_text(main_markdown)
+
+        # Add SI chunks
+        if si_markdown:
+            si_chunks = _chunk_si_text(si_markdown)
+            chunks.extend(si_chunks)
+
         if not chunks:
             logger.warning(f"No chunks generated for {doi}")
             return None
+
+        logger.info(f"Built {len(chunks)} chunks for {doi} (main={sum(1 for c in chunks if c.get('source') != 'si')}, si={sum(1 for c in chunks if c.get('source') == 'si')})")
 
         # Embed chunks
         texts = [c["text"] for c in chunks]
@@ -181,14 +377,7 @@ def _build_index(doi: str) -> Optional[tuple]:
         index.add(embedding_matrix)
 
         # Persist to disk
-        os.makedirs(os.path.join(_FAISS_DIR, "literature"), exist_ok=True)
-        safe_doi = doi.replace('/', '_')
-        try:
-            faiss.write_index(index, os.path.join(_FAISS_DIR, "literature", f"{safe_doi}.faiss"))
-            with open(os.path.join(_FAISS_DIR, "literature", f"{safe_doi}.json"), 'w', encoding='utf-8') as f:
-                json.dump(chunks, f, ensure_ascii=False)
-        except Exception as e:
-            logger.warning(f"Failed to persist FAISS index for {doi}: {e}")
+        _persist_index(doi, index, chunks)
 
         # Cache in memory
         with _cache_lock:
@@ -198,88 +387,6 @@ def _build_index(doi: str) -> Optional[tuple]:
 
     except Exception as e:
         logger.error(f"Failed to build index for {doi}: {e}")
-        return None
-    finally:
-        db.close()
-
-
-def _is_running_async() -> bool:
-    """Check if we're inside an async event loop."""
-    try:
-        import asyncio
-        loop = asyncio.get_running_loop()
-        return loop.is_running()
-    except RuntimeError:
-        return False
-
-
-async def build_index_async(doi: str) -> Optional[tuple]:
-    """Async version of index building for use in API handlers."""
-    db = SessionLocal()
-    try:
-        lit = db.query(Literature).filter(Literature.doi == doi).first()
-        if not lit:
-            return None
-
-        # Try to get markdown from cached PDF
-        markdown = ""
-        if lit.local_pdf_path and os.path.exists(lit.local_pdf_path):
-            markdown = await pdf_processor.convert_to_markdown(lit.local_pdf_path)
-
-        # Fallback: use DB text
-        if not markdown:
-            combined = []
-            if lit.abstract:
-                combined.append(lit.abstract)
-            if lit.performance_data:
-                combined.append(f"Performance: {lit.performance_data}")
-            if lit.process_params:
-                combined.append(f"Process: {lit.process_params}")
-            if lit.source_mapping:
-                combined.append(f"Evidence: {lit.source_mapping}")
-            markdown = "\n\n".join(combined)
-
-        if not markdown:
-            return None
-
-        chunks = _chunk_text(markdown)
-        if not chunks:
-            return None
-
-        # Embed
-        texts = [c["text"] for c in chunks]
-        embeddings = model_manager.embed_texts(texts)
-        if embeddings is None:
-            return None
-
-        # Build FAISS index
-        import faiss
-        import numpy as np
-
-        dim = len(embeddings[0])
-        embedding_matrix = np.array(embeddings, dtype=np.float32)
-        faiss.normalize_L2(embedding_matrix)
-
-        index = faiss.IndexFlatIP(dim)
-        index.add(embedding_matrix)
-
-        # Persist
-        os.makedirs(os.path.join(_FAISS_DIR, "literature"), exist_ok=True)
-        safe_doi = doi.replace('/', '_')
-        try:
-            faiss.write_index(index, os.path.join(_FAISS_DIR, "literature", f"{safe_doi}.faiss"))
-            with open(os.path.join(_FAISS_DIR, "literature", f"{safe_doi}.json"), 'w', encoding='utf-8') as f:
-                json.dump(chunks, f, ensure_ascii=False)
-        except Exception as e:
-            logger.warning(f"Failed to persist FAISS index: {e}")
-
-        with _cache_lock:
-            _index_cache[doi] = (index, chunks)
-
-        return (index, chunks)
-
-    except Exception as e:
-        logger.error(f"build_index_async failed for {doi}: {e}")
         return None
     finally:
         db.close()
@@ -297,8 +404,6 @@ async def answer_question(doi: str, question: str, client, model: str):
     Yields:
         SSE event dicts with type: content/source/done/error
     """
-    import openai
-
     # Prevent duplicate processing
     with _active_qa_lock:
         if doi in _active_qa:
@@ -340,21 +445,24 @@ async def answer_question(doi: str, question: str, client, model: str):
             return
 
         import numpy as np
-        q_vector = np.array([q_embedding], dtype=np.float32)
         import faiss
+        q_vector = np.array([q_embedding], dtype=np.float32)
         faiss.normalize_L2(q_vector)
 
         scores, indices = index.search(q_vector, TOP_K)
 
-        # Gather relevant context
+        # Gather relevant context with relevance filtering
         relevant_chunks = []
         for i, idx in enumerate(indices[0]):
-            if idx < len(chunks) and idx >= 0:
+            if 0 <= idx < len(chunks) and scores[0][i] >= MIN_RELEVANCE_SCORE:
                 chunk = chunks[idx]
                 relevant_chunks.append({
                     "text": chunk["text"],
-                    "page": chunk["page"],
+                    "page": chunk.get("page", 1),
                     "score": float(scores[0][i]),
+                    "source": chunk.get("source", "main"),
+                    "section": chunk.get("section"),
+                    "has_table": chunk.get("has_table", False),
                 })
 
         if not relevant_chunks:
@@ -365,12 +473,14 @@ async def answer_question(doi: str, question: str, client, model: str):
             }
             return
 
-        # Step 3: Build context for LLM
+        # Step 3: Build context for LLM with page citations
         context_parts = []
-        best_source = relevant_chunks[0]  # Track best source for citation
-
         for rc in relevant_chunks:
-            context_parts.append(f"[Page {rc['page']}] {rc['text']}")
+            page_ref = f"[Page {rc['page']}" if rc['page'] > 0 else "[SI"
+            if rc.get('section'):
+                page_ref += f", {rc['section']}"
+            page_ref += "]"
+            context_parts.append(f"{page_ref} {rc['text']}")
 
         context_text = "\n\n---\n\n".join(context_parts)
 
@@ -385,7 +495,7 @@ async def answer_question(doi: str, question: str, client, model: str):
             stream = await client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "You are a precise scientific Q&A assistant. Answer based ONLY on the provided context. Always cite the page number."},
+                    {"role": "system", "content": "You are a precise scientific Q&A assistant. Answer based ONLY on the provided context. Always cite the page number. If the answer comes from Supporting Information, mention it."},
                     {"role": "user", "content": prompt},
                 ],
                 stream=True,
@@ -429,14 +539,24 @@ async def answer_question(doi: str, question: str, client, model: str):
                 }
                 return
 
-        # Step 5: Source citation event
-        yield {
-            "type": "source",
-            "page": best_source["page"],
-            "excerpt": best_source["text"][:300],
-            "file": "main",
-            "timestamp": datetime.datetime.now().isoformat(),
-        }
+        # Step 5: Source citation events — emit all relevant sources
+        sources = []
+        for rc in relevant_chunks:
+            source_event = {
+                "page": rc["page"],
+                "excerpt": rc["text"][:300],
+                "file": rc.get("source", "main"),
+                "relevance": round(rc["score"], 3),
+            }
+            if rc.get("section"):
+                source_event["section"] = rc["section"]
+            sources.append(source_event)
+
+            yield {
+                "type": "source",
+                "timestamp": datetime.datetime.now().isoformat(),
+                **source_event,
+            }
 
         # Step 6: Save to DB
         cost_estimate = (total_tokens / 1_000_000) * 0.15 if total_tokens > 0 else 0.001
@@ -447,7 +567,11 @@ async def answer_question(doi: str, question: str, client, model: str):
                 literature_doi=doi,
                 question=question,
                 answer=answer_text,
-                source=json.dumps({"page": best_source["page"], "excerpt": best_source["text"][:300]}),
+                source=json.dumps({
+                    "primary_page": relevant_chunks[0]["page"],
+                    "primary_excerpt": relevant_chunks[0]["text"][:300],
+                    "sources": sources,
+                }),
                 cost=cost_estimate,
                 tokens_used=total_tokens,
             )
@@ -494,9 +618,11 @@ async def get_suggestions(doi: str, client, model: str) -> list[str]:
                 pass
 
         if not context_parts:
-            return ["What is the main contribution of this paper?",
-                    "What materials are used in this study?",
-                    "What are the key performance metrics?"]
+            return [
+                "What is the main contribution of this paper?",
+                "What materials are used in this study?",
+                "What are the key performance metrics?",
+            ]
 
         from .prompts import QA_SUGGESTIONS_PROMPT
         prompt = QA_SUGGESTIONS_PROMPT.replace("{context}", "\n".join(context_parts))
@@ -513,7 +639,6 @@ async def get_suggestions(doi: str, client, model: str) -> list[str]:
             raw = response.choices[0].message.content or ""
 
             # Parse numbered questions
-            import re
             questions = re.findall(r'(?:\d+\.\s*|[-•]\s*)(.+?)(?:\n|$)', raw)
             if not questions:
                 questions = [line.strip() for line in raw.strip().split('\n') if line.strip() and len(line.strip()) > 10]
@@ -522,9 +647,11 @@ async def get_suggestions(doi: str, client, model: str) -> list[str]:
 
         except Exception as e:
             logger.error(f"Failed to generate suggestions: {e}")
-            return ["What is the main contribution of this paper?",
-                    "What materials are used in this study?",
-                    "What are the key performance metrics?"]
+            return [
+                "What is the main contribution of this paper?",
+                "What materials are used in this study?",
+                "What are the key performance metrics?",
+            ]
 
     finally:
         db.close()

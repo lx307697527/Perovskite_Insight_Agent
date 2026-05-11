@@ -14,8 +14,8 @@ const AnswerCard: React.FC<AnswerCardProps> = ({ question, events, onPageClick }
     .map((e) => e.text)
     .join('');
 
-  // Get source info
-  const sourceEvent = events.find((e) => e.type === 'source');
+  // Collect ALL source events (multiple citations supported)
+  const sourceEvents = events.filter((e) => e.type === 'source');
   const doneEvent = events.find((e) => e.type === 'done');
   const errorEvent = events.find((e) => e.type === 'error');
 
@@ -52,32 +52,72 @@ const AnswerCard: React.FC<AnswerCardProps> = ({ question, events, onPageClick }
           </div>
         ) : null}
 
-        {/* Source citation */}
-        {sourceEvent && isDone && (
+        {/* Source citations — multiple sources supported */}
+        {sourceEvents.length > 0 && isDone && (
           <div className="mt-4 pt-3 border-t border-white/5">
-            <div className="flex items-start gap-2">
-              <svg className="w-4 h-4 text-brand-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="flex items-center gap-2 mb-2">
+              <svg className="w-4 h-4 text-brand-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
               </svg>
-              <div className="min-w-0">
-                <p className="text-[11px] text-slate-400 mb-1">来源定位</p>
-                <button
-                  type="button"
-                  onClick={() => sourceEvent.page && onPageClick?.(sourceEvent.page)}
-                  disabled={!sourceEvent.page || !onPageClick}
-                  className="text-xs text-brand-400 hover:text-brand-300 disabled:text-slate-500 disabled:cursor-default transition-colors"
-                >
-                  {sourceEvent.page ? `第 ${sourceEvent.page} 页` : '未知页码'}
-                  {onPageClick && sourceEvent.page && (
-                    <span className="ml-1 text-[10px] text-slate-500">点击跳转</span>
-                  )}
-                </button>
-                {sourceEvent.excerpt && (
-                  <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed">
-                    "{sourceEvent.excerpt}"
-                  </p>
-                )}
-              </div>
+              <p className="text-[11px] text-slate-400">来源定位</p>
+            </div>
+            <div className="space-y-2">
+              {sourceEvents.map((source, idx) => (
+                <div key={idx} className="flex items-start gap-2 pl-6">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      {/* Source file badge */}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                        source.file === 'si'
+                          ? 'bg-purple-500/10 text-purple-400'
+                          : 'bg-brand-500/10 text-brand-400'
+                      }`}>
+                        {source.file === 'si' ? 'SI' : 'Main'}
+                      </span>
+
+                      {/* Page link */}
+                      {source.page && source.page > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => onPageClick?.(source.page!)}
+                          disabled={!onPageClick}
+                          className="text-xs text-brand-400 hover:text-brand-300 disabled:text-slate-500 disabled:cursor-default transition-colors"
+                        >
+                          第 {source.page} 页
+                          {onPageClick && (
+                            <span className="ml-1 text-[10px] text-slate-500">点击跳转</span>
+                          )}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-500">
+                          {source.file === 'si' ? '补充材料' : '未知页码'}
+                        </span>
+                      )}
+
+                      {/* Section label */}
+                      {source.section && (
+                        <span className="text-[10px] text-slate-500 truncate max-w-[160px]" title={source.section}>
+                          {source.section}
+                        </span>
+                      )}
+
+                      {/* Relevance score */}
+                      {source.relevance !== undefined && (
+                        <span className="text-[10px] text-slate-600 font-mono">
+                          {Math.round(source.relevance * 100)}%
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Excerpt */}
+                    {source.excerpt && (
+                      <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed">
+                        "{source.excerpt}"
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}

@@ -1,5 +1,6 @@
 """Q&A API routes — precise question answering with RAG + SSE streaming."""
 
+import re
 import json
 import datetime
 import logging
@@ -14,9 +15,20 @@ from core.model_manager import get_status as get_embedding_status
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/qa", tags=["qa"])
 
+DOI_PATTERN = re.compile(r'^10\.\d{4,9}/[-._;()/:A-Z0-9]+$', re.IGNORECASE)
+
 
 class QuestionRequest(BaseModel):
     question: str
+
+
+def _validate_doi(doi: str) -> None:
+    """Validate DOI format. Raises HTTPException if invalid."""
+    if not DOI_PATTERN.match(doi):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid DOI format: {doi}. Expected format: 10.xxxx/...",
+        )
 
 
 def _get_client_and_model():
@@ -38,12 +50,19 @@ async def ask_question(doi: str, body: QuestionRequest):
 
     SSE event types:
     - content: streaming text chunk {type, text, timestamp}
-    - source: page citation {type, page, excerpt, file, timestamp}
+    - source: page citation {type, page, excerpt, file, section, relevance, timestamp}
+              May emit multiple source events for multi-source answers.
+              file: "main" or "si" (Supporting Information)
     - done: completion {type, cost, tokens, timestamp}
     - error: error message {type, message, timestamp}
     """
+    _validate_doi(doi)
+
     if not body.question or not body.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
+
+    if len(body.question) > 1000:
+        raise HTTPException(status_code=400, detail="Question too long (max 1000 characters)")
 
     # Check embedding model status
     emb_status = get_embedding_status()
@@ -59,6 +78,19 @@ async def ask_question(doi: str, body: QuestionRequest):
                 detail=f"Embedding model not available (status: {emb_status}). Please check configuration.",
             )
 
+    # Verify paper exists in DB
+    from core.database import SessionLocal, Literature
+    db = SessionLocal()
+    try:
+        lit = db.query(Literature).filter(Literature.doi == doi).first()
+        if not lit:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Paper {doi} not found. Please add it to your library first.",
+            )
+    finally:
+        db.close()
+
     client, model = _get_client_and_model()
 
     async def event_stream():
@@ -72,7 +104,7 @@ async def ask_question(doi: str, body: QuestionRequest):
                 "message": str(e),
                 "timestamp": datetime.datetime.now().isoformat(),
             }
-            yield f"data: {json.dumps(error_event)}\n\n"
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -80,6 +112,7 @@ async def ask_question(doi: str, body: QuestionRequest):
 @router.get("/{doi:path}/history")
 async def get_history(doi: str):
     """Get Q&A history for a paper."""
+    _validate_doi(doi)
     try:
         records = get_qa_history(doi)
         return {"success": True, "data": records}
@@ -91,6 +124,7 @@ async def get_history(doi: str):
 @router.get("/{doi:path}/suggestions")
 async def get_qa_suggestions(doi: str):
     """Auto-generate 3-5 quick questions for a paper."""
+    _validate_doi(doi)
     try:
         client, model = _get_client_and_model()
         suggestions = await get_suggestions(doi, client, model)

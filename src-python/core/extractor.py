@@ -1,14 +1,25 @@
+"""
+Stage2 Deep Extraction pipeline for SIA V2.1.
+
+Orchestrates: Download → Parse → Smart Slice SI → AI Deep Extract → Save
+Integrates with Stage1 screening data and stores markdown for QA engine reuse.
+"""
+
 import json
 import datetime
+import os
+import uuid
+import logging
+
 from .pdf_engine import pdf_processor
 from .crawler import crawler
-from .database import SessionLocal, Literature
+from .database import SessionLocal, Literature, SIFile
 from .prompts import PEROVSKITE_EXTRACTOR_PROMPT, SI_EXTRACTOR_PROMPT, STAGE2_DEEP_PROMPT
 from .progress import create_tracker
 from .qa_engine import invalidate_index
+from .smart_slicer import slice_si
+
 import openai
-import os
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -16,12 +27,18 @@ logger = logging.getLogger(__name__)
 client = openai.AsyncOpenAI(api_key="placeholder")
 current_model = "deepseek-chat"
 
+# Directory to cache parsed markdown for QA reuse
+_SIA_DIR = os.path.join(
+    os.environ.get("APPDATA", os.path.expanduser("~")), "SIA"
+)
+_MARKDOWN_CACHE_DIR = os.path.join(_SIA_DIR, "cache", "markdown")
+
+
 class PaperExtractor:
     """
-    Orchestrates the full extraction workflow:
-    Download -> Parse -> AI Extract -> Save
+    Stage2 deep extraction pipeline.
 
-    V2.1: Supports Stage2 deep extraction with 5-stage progress tracking.
+    Stages: downloading → parsing → analyzing_si → extracting → saving
     """
 
     def _get_client(self):
@@ -35,6 +52,17 @@ class PaperExtractor:
         )
         current_model = config.get('stage2Model', config.get('model', 'deepseek-chat'))
         logger.info(f"Extractor config updated: Model={current_model}")
+
+    def _save_markdown_cache(self, doi: str, markdown: str, suffix: str = "main"):
+        """Cache parsed markdown to disk for QA engine reuse."""
+        os.makedirs(_MARKDOWN_CACHE_DIR, exist_ok=True)
+        safe_doi = doi.replace('/', '_')
+        path = os.path.join(_MARKDOWN_CACHE_DIR, f"{safe_doi}_{suffix}.md")
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(markdown)
+        except Exception as e:
+            logger.warning(f"Failed to cache markdown for {doi}: {e}")
 
     async def process_full_paper(self, doi: str, use_stage2_prompt: bool = True):
         """
@@ -83,15 +111,23 @@ class PaperExtractor:
             if not markdown_content:
                 raise Exception("Failed to extract text from PDF. The file may be encrypted or corrupted.")
 
-            # Discovery SI (Supplemental Information)
+            # Cache markdown for QA engine
+            self._save_markdown_cache(doi, markdown_content, "main")
+
+            # Discover and download SI (Supplemental Information)
             si_markdown = ""
+            si_file_path = None
             if links.get('si'):
                 tracker.advance("analyzing_si")
                 progress = tracker.get_progress()
                 yield {"status": "analyzing_si", "progress": progress, "timestamp": datetime.datetime.now().isoformat()}
+
                 si_pdf, si_error = await crawler.download_file(links['si'][0], f"{doi.replace('/', '_')}_SI.pdf")
                 if si_pdf:
+                    si_file_path = si_pdf
                     si_markdown = await pdf_processor.convert_to_markdown(si_pdf)
+                    if si_markdown:
+                        self._save_markdown_cache(doi, si_markdown, "si")
 
             # 4. AI Deep Extraction
             tracker.advance("extracting")
@@ -100,12 +136,17 @@ class PaperExtractor:
 
             # Choose prompt: Stage2 deep or legacy perovskite extractor
             extract_prompt = STAGE2_DEEP_PROMPT if use_stage2_prompt else PEROVSKITE_EXTRACTOR_PROMPT
-            ai_data = await self._ai_extract(markdown_content, extract_prompt)
 
-            # Analyze SI for Recipe (If available)
+            # Use smart_slicer to prepare content for extraction
+            main_content = self._prepare_main_content(markdown_content)
+            ai_data = await self._ai_extract(main_content, extract_prompt)
+
+            # Analyze SI for Recipe using smart_slicer
             si_data = {}
             if si_markdown:
-                si_data = await self._ai_extract(si_markdown, SI_EXTRACTOR_PROMPT)
+                si_chunks = self._prepare_si_content(si_markdown)
+                if si_chunks:
+                    si_data = await self._ai_extract(si_chunks, SI_EXTRACTOR_PROMPT)
 
             # 5. Save to DB
             tracker.advance("saving")
@@ -156,6 +197,11 @@ class PaperExtractor:
                 if ai_data.get('stability'):
                     existing_mapping['stability_evidence'] = ai_data['stability'].get('evidence', '')
 
+                # Build SI paths list for QA engine
+                si_paths_list = []
+                if si_file_path:
+                    si_paths_list.append(si_file_path)
+
                 if not paper:
                     paper = Literature(
                         doi=doi,
@@ -169,6 +215,7 @@ class PaperExtractor:
                         performance_data=json.dumps(performance_data),
                         process_params=json.dumps(si_data) if si_data else json.dumps(ai_data.get('process', [])),
                         local_pdf_path=main_pdf,
+                        si_paths=json.dumps(si_paths_list) if si_paths_list else None,
                         quality_flag="OK",
                     )
                     db.add(paper)
@@ -182,10 +229,15 @@ class PaperExtractor:
                     paper.performance_data = json.dumps(performance_data)
                     paper.process_params = json.dumps(si_data) if si_data else json.dumps(ai_data.get('process', []))
                     paper.local_pdf_path = main_pdf
+                    paper.si_paths = json.dumps(si_paths_list) if si_paths_list else None
                     paper.quality_flag = "OK"
 
                 db.commit()
                 db.refresh(paper)
+
+                # Track SI file in DB for QA engine
+                if si_file_path:
+                    self._track_si_file(db, doi, si_file_path, links.get('si', [''])[0])
 
                 # Invalidate any cached Q&A index since data changed
                 invalidate_index(doi)
@@ -210,6 +262,75 @@ class PaperExtractor:
         finally:
             db.close()
 
+    def _track_si_file(self, db, doi: str, file_path: str, url: str):
+        """Create or update SIFile record for QA engine to find."""
+        try:
+            existing = db.query(SIFile).filter(
+                SIFile.literature_doi == doi,
+                SIFile.local_path == file_path,
+            ).first()
+            if not existing:
+                si_file = SIFile(
+                    id=str(uuid.uuid4()),
+                    literature_doi=doi,
+                    url=url,
+                    type="pdf",
+                    status="ready",
+                    local_path=file_path,
+                )
+                db.add(si_file)
+                db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to track SI file: {e}")
+            db.rollback()
+
+    def _prepare_main_content(self, markdown: str) -> str:
+        """Prepare main text content for AI extraction.
+
+        Uses smart_slicer-like logic to find the most relevant sections
+        (experimental/methods), falling back to first 30K chars.
+        """
+        if not markdown:
+            return ""
+
+        content_lower = markdown.lower()
+        start_idx = content_lower.find("experimental")
+        if start_idx == -1:
+            start_idx = content_lower.find("method")
+
+        if start_idx != -1:
+            # Include 500 chars before the anchor for context
+            return markdown[max(0, start_idx - 500):start_idx + 30000]
+
+        return markdown[:30000]
+
+    def _prepare_si_content(self, si_markdown: str) -> str:
+        """Prepare SI content for AI extraction using smart_slicer.
+
+        Returns the most relevant SI chunks (experimental sections + tables).
+        """
+        if not si_markdown:
+            return ""
+
+        slices = slice_si(si_markdown, max_chunk_tokens=4000, overlap_tokens=200)
+        if not slices:
+            return si_markdown[:30000]
+
+        # Combine the most relevant slices, up to ~30K chars
+        parts = []
+        total_len = 0
+        for s in slices:
+            if total_len + len(s.content) > 30000:
+                # Truncate last chunk to fit
+                remaining = 30000 - total_len
+                if remaining > 500:
+                    parts.append(s.content[:remaining])
+                break
+            parts.append(s.content)
+            total_len += len(s.content)
+
+        return "\n\n---\n\n".join(parts)
+
     async def process_local_pdf(self, file_path: str):
         """
         Processes a PDF file directly from a local path
@@ -227,10 +348,15 @@ class PaperExtractor:
                 yield {"status": "failed", "error": "PDF解析失败，无法提取文本内容", "timestamp": datetime.datetime.now().isoformat()}
                 return
 
+            # Cache markdown
+            upload_id = f"local_{os.path.splitext(filename)[0]}"
+            self._save_markdown_cache(upload_id, markdown_content, "main")
+
             yield {"status": "extracting", "progress": 50, "timestamp": datetime.datetime.now().isoformat()}
 
-            # 2. AI Extraction
-            ai_data = await self._ai_extract(markdown_content, PEROVSKITE_EXTRACTOR_PROMPT)
+            # 2. AI Extraction — use smart content preparation
+            main_content = self._prepare_main_content(markdown_content)
+            ai_data = await self._ai_extract(main_content, PEROVSKITE_EXTRACTOR_PROMPT)
 
             yield {"status": "completed", "result": {
                 "doi": ai_data.get("doi", "local_file"),
@@ -266,16 +392,8 @@ class PaperExtractor:
                 logger.warning("_ai_extract received empty content")
                 return skeleton
 
-            # Smart Slicing
-            content_lower = content.lower()
-            start_idx = content_lower.find("experimental")
-            if start_idx == -1:
-                start_idx = content_lower.find("method")
-
-            processed_content = content[max(0, start_idx-500):start_idx+30000] if start_idx != -1 else content[:30000]
-
             # Escape curly braces to prevent format string issues
-            safe_content = processed_content.replace('{', '{{').replace('}', '}}')
+            safe_content = content.replace('{', '{{').replace('}', '}}')
             formatted_prompt = prompt.replace('{content}', safe_content)
 
             logger.info(f"Sending prompt to AI, content length: {len(safe_content)}")
@@ -367,5 +485,6 @@ class PaperExtractor:
             return f"{num:.1f}"
 
         return f"{num:.2f}"
+
 
 extractor = PaperExtractor()

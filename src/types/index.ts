@@ -181,7 +181,9 @@ export interface QASSEEvent {
   page?: number;
   paragraph?: number;
   excerpt?: string;
-  file?: string;
+  file?: string;        // "main" or "si" (Supporting Information)
+  section?: string;     // SI section title (e.g., "Experimental Section")
+  relevance?: number;   // cosine similarity score (0-1)
   cost?: number;
   tokens?: number;
   message?: string;

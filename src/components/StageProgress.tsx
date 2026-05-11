@@ -8,12 +8,15 @@ interface StageProgressProps {
 
 const STAGE_LABELS: Record<string, string> = {
   downloading: '下载 PDF',
+  fetch: '获取论文信息',
   parsing: '解析文档',
+  analyze: 'AI 分析摘要',
   analyzing_si: '分析 SI 附件',
   extracting: 'AI 提取数据',
   ai_analyzing: 'AI 分析主文',
   ai_analyzing_si: 'AI 分析 SI',
   screening: 'Stage1 筛选',
+  save: '保存筛选结果',
   saving: '保存结果',
 };
 
