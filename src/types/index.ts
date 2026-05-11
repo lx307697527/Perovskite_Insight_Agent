@@ -155,10 +155,20 @@ export interface MetricField {
   evidence?: string;
 }
 
+// --- Stage Progress Info (from progress.py) ---
+export interface StageProgressInfo {
+  progress: number;
+  current_stage: string;
+  current_label: string;
+  stages: { name: string; label: string; weight: number; status: string }[];
+  eta_seconds: number | null;
+  timestamp: string;
+}
+
 // --- SSE Event Types ---
 export interface SSEEvent {
-  status: 'downloading' | 'parsing' | 'analyzing_si' | 'extracting' | 'ai_analyzing' | 'ai_analyzing_si' | 'completed' | 'failed' | 'cached' | 'error';
-  progress?: number;
+  status: 'downloading' | 'parsing' | 'analyzing_si' | 'extracting' | 'ai_analyzing' | 'ai_analyzing_si' | 'screening' | 'completed' | 'failed' | 'cached' | 'error';
+  progress?: number | StageProgressInfo;
   result?: ExtractionResult;
   error?: string;
   message?: string;

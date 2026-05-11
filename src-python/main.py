@@ -55,6 +55,10 @@ if not current_config:
 extractor.update_config(current_config)
 translator.update_config(current_config)
 
+# Update Stage1 screener config
+from core.stage1 import stage1_screener
+stage1_screener.update_config(current_config)
+
 # Start embedding model background loading
 start_background_load()
 
