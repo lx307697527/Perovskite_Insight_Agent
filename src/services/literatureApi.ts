@@ -5,7 +5,7 @@ const DEFAULT_TIMEOUT = 30000;
 
 async function fetchJSON<T>(url: string, options?: RequestInit, timeout = DEFAULT_TIMEOUT): Promise<T> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const timeoutId = setTimeout(() => controller.abort(new Error('请求超时，请检查后端服务是否运行 (localhost:8000)')), timeout);
   try {
     const resp = await fetch(url, { ...options, signal: controller.signal });
     if (!resp.ok) {
@@ -15,6 +15,11 @@ async function fetchJSON<T>(url: string, options?: RequestInit, timeout = DEFAUL
     const data = await resp.json();
     if (!data.success) throw new Error(data.error || 'Request failed');
     return data.data as T;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('请求超时，请检查后端服务是否运行 (localhost:8000)');
+    }
+    throw err;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -42,7 +47,7 @@ export async function uploadLiterature(file: File, projectId?: string | null): P
   formData.append('file', file);
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
+  const timeoutId = setTimeout(() => controller.abort(new Error('上传超时')), 60000);
   try {
     const url = `${API_BASE}/api/literature/upload${projectId ? `?project_id=${projectId}` : ''}`;
     const resp = await fetch(url, { method: 'POST', body: formData, signal: controller.signal });
@@ -53,6 +58,11 @@ export async function uploadLiterature(file: File, projectId?: string | null): P
     const data = await resp.json();
     if (!data.success) throw new Error(data.error || 'Upload failed');
     return data.data;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('上传超时，请检查后端服务是否运行');
+    }
+    throw err;
   } finally {
     clearTimeout(timeoutId);
   }

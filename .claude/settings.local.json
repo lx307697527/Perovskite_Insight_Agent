@@ -11,7 +11,11 @@
       "Bash(pip install *)",
       "Bash(python -c \"from core.pdf_engine import pdf_processor; print\\('PDF Engine loaded successfully'\\)\")",
       "WebSearch",
-      "Bash(dir /s /b \"d:\\\\Code_Space\\\\Perovskite_Insight_Agent\\\\src-python\")"
+      "Bash(dir /s /b \"d:\\\\Code_Space\\\\Perovskite_Insight_Agent\\\\src-python\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Code_Space\\\\Perovskite_Insight_Agent\" -Directory -Depth 1)",
+      "Bash(Select-Object FullName)"
     ]
   }
 }

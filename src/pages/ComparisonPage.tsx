@@ -588,8 +588,9 @@ const ComparisonPage: React.FC = () => {
                   );
                 })}
               </tr>
-            ))}
-          </tbody>
+            );
+          })}
+        </tbody>
         </table>
       </div>
     </div>
