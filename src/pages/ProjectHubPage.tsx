@@ -1,13 +1,22 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAppStore } from '../store';
 import * as projectApi from '../services/projectApi';
 import * as literatureApi from '../services/literatureApi';
+import * as chatApi from '../services/chatApi';
 import type { Project, Literature } from '../types';
+import type { ChatSSEEvent } from '../services/chatApi';
 
 interface ProjectWithStats extends Project {
   literature_count: number;
   extracted_count: number;
+}
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sources?: { doi?: string; page?: number; excerpt?: string; file?: string; relevance?: number }[];
 }
 
 const ProjectHubPage: React.FC = () => {
@@ -31,13 +40,30 @@ const ProjectHubPage: React.FC = () => {
   const [activeProject, setActiveProject] = useState<projectApi.ProjectDetail | null>(null);
   const [projectLiterature, setProjectLiterature] = useState<Literature[]>([]);
 
+  // Multi-doc chat state
+  const [chatQuestion, setChatQuestion] = useState('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatContextDois, setChatContextDois] = useState<string[]>([]);
+  const [chatStreaming, setChatStreaming] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatCleanupRef = useRef<(() => void) | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
   const isMounted = useRef(true);
 
   useEffect(() => {
     isMounted.current = true;
     loadData();
-    return () => { isMounted.current = false; };
+    return () => {
+      isMounted.current = false;
+      chatCleanupRef.current?.();
+    };
   }, [projectId]);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
 
   const loadData = async () => {
     setLoading(true);
@@ -56,6 +82,12 @@ const ProjectHubPage: React.FC = () => {
         if (isMounted.current) {
           setActiveProject(detail);
           setProjectLiterature(detail.literature || []);
+          // Auto-select all extracted literature for chat context
+          const extracted = (detail.literature || []).filter((l: Literature) => l.is_extracted);
+          setChatContextDois(extracted.map((l: Literature) => l.doi));
+          // Reset chat state
+          setChatMessages([]);
+          setChatQuestion('');
         }
       } else {
         setActiveProject(null);
@@ -117,107 +149,319 @@ const ProjectHubPage: React.FC = () => {
     );
   };
 
-  // Detail view
+  // Multi-doc chat submit
+  const handleChatSubmit = useCallback(() => {
+    if (!chatQuestion.trim() || chatStreaming || !projectId) return;
+    if (chatContextDois.length === 0) {
+      showToast('请至少选择一篇已提取文献', 'error');
+      return;
+    }
+
+    const question = chatQuestion.trim();
+    setChatQuestion('');
+    setChatStreaming(true);
+
+    // Add user message
+    const userMsg: ChatMessage = {
+      id: `user_${Date.now()}`,
+      role: 'user',
+      content: question,
+    };
+    setChatMessages((prev) => [...prev, userMsg]);
+
+    // Streaming assistant message
+    const assistantId = `asst_${Date.now()}`;
+    const assistantMsg: ChatMessage = {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      sources: [],
+    };
+    setChatMessages((prev) => [...prev, assistantMsg]);
+
+    const onEvent = (event: ChatSSEEvent) => {
+      if (!isMounted.current) return;
+
+      if (event.type === 'content' && event.text) {
+        setChatMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: m.content + event.text }
+              : m
+          )
+        );
+      } else if (event.type === 'source') {
+        setChatMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  sources: [...(m.sources || []), {
+                    doi: event.doi,
+                    page: event.page,
+                    excerpt: event.excerpt,
+                    file: event.file,
+                    relevance: event.relevance,
+                  }],
+                }
+              : m
+          )
+        );
+      } else if (event.type === 'done') {
+        setChatStreaming(false);
+      } else if (event.type === 'error') {
+        setChatMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: m.content || `Error: ${event.message || 'Unknown error'}` }
+              : m
+          )
+        );
+        setChatStreaming(false);
+      }
+    };
+
+    const onError = (err: Error) => {
+      if (!isMounted.current) return;
+      setChatMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: `连接失败: ${err.message}` }
+            : m
+        )
+      );
+      setChatStreaming(false);
+    };
+
+    chatCleanupRef.current = chatApi.createChatConnection(
+      projectId,
+      question,
+      chatContextDois,
+      onEvent,
+      onError,
+    );
+  }, [chatQuestion, chatStreaming, chatContextDois, projectId, showToast]);
+
+  const toggleChatContext = (doi: string) => {
+    setChatContextDois((prev) =>
+      prev.includes(doi) ? prev.filter((d) => d !== doi) : [...prev, doi]
+    );
+  };
+
+  // ============================================================
+  // Detail view with Multi-Doc Chat
+  // ============================================================
   if (projectId && activeProject) {
     return (
-      <div className="h-screen bg-premium-bg overflow-y-auto p-8">
-        <div className="max-w-5xl mx-auto">
-          {/* Header */}
-          <div className="flex items-center gap-4 mb-8">
-            <button
-              type="button"
-              onClick={() => navigate('/projects')}
-              className="text-slate-400 hover:text-white transition-colors text-sm"
-            >
-              ← 所有项目
-            </button>
-          </div>
-
-          <div className="glass-card rounded-3xl p-8 mb-8">
-            <div className="flex justify-between items-start">
-              <div>
-                <h1 className="text-2xl font-bold text-white mb-2">{activeProject.name}</h1>
-                {activeProject.description && (
-                  <p className="text-slate-400 text-sm mb-3">{activeProject.description}</p>
-                )}
-                <div className="flex gap-4 text-xs text-slate-500">
-                  <span>{activeProject.literature_count} 篇文献</span>
-                  <span>{activeProject.extracted_count} 已提取</span>
-                  <span className="px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-400">{activeProject.domain}</span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => handleDeleteProject(activeProject.id)}
-                className="text-xs text-slate-600 hover:text-red-400 transition-colors"
-              >
-                删除项目
-              </button>
-            </div>
-          </div>
-
-          {/* Literature list */}
-          <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em] mb-4">
-            项目文献
-          </h3>
-          {projectLiterature.length > 0 ? (
-            <div className="space-y-3">
-              {projectLiterature.map((lit) => (
-                <div
-                  key={lit.doi}
-                  onClick={() => {
-                    if (lit.is_extracted) {
-                      navigate(`/details/${lit.doi}`);
-                    }
-                  }}
-                  className={`glass-card p-4 rounded-2xl border-white/5 hover:border-brand-500/30 transition-all ${
-                    lit.is_extracted ? 'cursor-pointer' : 'opacity-60'
-                  }`}
+      <div className="h-screen bg-premium-bg overflow-hidden">
+        <div className="h-full grid grid-cols-[3fr_2fr]">
+          {/* Left: Project info + Literature list */}
+          <div className="overflow-y-auto p-8">
+            <div className="max-w-2xl mx-auto">
+              {/* Header */}
+              <div className="flex items-center gap-4 mb-8">
+                <button
+                  type="button"
+                  onClick={() => navigate('/projects')}
+                  className="text-slate-400 hover:text-white transition-colors text-sm"
                 >
-                  <div className="flex justify-between items-start mb-1">
-                    <span className="text-[10px] font-bold text-brand-400 uppercase">
-                      {lit.journal} {lit.year}
-                    </span>
-                    <div className="flex gap-2 items-center">
-                      {lit.quality_flag && lit.quality_flag !== 'OK' && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-400">
-                          {lit.quality_flag}
-                        </span>
-                      )}
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                        lit.extraction_stage === 'stage2' ? 'bg-emerald-500/10 text-emerald-400' :
-                        lit.extraction_stage === 'stage1' ? 'bg-blue-500/10 text-blue-400' :
-                        lit.extraction_stage === 'failed' ? 'bg-red-500/10 text-red-400' :
-                        'bg-slate-500/10 text-slate-400'
-                      }`}>
-                        {lit.extraction_stage === 'none' ? '未提取' :
-                         lit.extraction_stage === 'stage1' ? 'Stage1' :
-                         lit.extraction_stage === 'stage2' ? '已提取' : '失败'}
-                      </span>
+                  ← 所有项目
+                </button>
+              </div>
+
+              <div className="glass-card rounded-3xl p-8 mb-8">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h1 className="text-2xl font-bold text-white mb-2">{activeProject.name}</h1>
+                    {activeProject.description && (
+                      <p className="text-slate-400 text-sm mb-3">{activeProject.description}</p>
+                    )}
+                    <div className="flex gap-4 text-xs text-slate-500">
+                      <span>{activeProject.literature_count} 篇文献</span>
+                      <span>{activeProject.extracted_count} 已提取</span>
+                      <span className="px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-400">{activeProject.domain}</span>
                     </div>
                   </div>
-                  <h4 className="text-sm font-bold text-slate-200 truncate">{lit.title}</h4>
-                  {lit.authors && <p className="text-[11px] text-slate-500 truncate mt-1">{lit.authors}</p>}
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteProject(activeProject.id)}
+                    className="text-xs text-slate-600 hover:text-red-400 transition-colors"
+                  >
+                    删除项目
+                  </button>
+                </div>
+              </div>
+
+              {/* Literature list */}
+              <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em] mb-4">
+                项目文献
+              </h3>
+              {projectLiterature.length > 0 ? (
+                <div className="space-y-3">
+                  {projectLiterature.map((lit) => (
+                    <div
+                      key={lit.doi}
+                      onClick={() => {
+                        if (lit.is_extracted) {
+                          navigate(`/details/${lit.doi}`);
+                        }
+                      }}
+                      className={`glass-card p-4 rounded-2xl border-white/5 hover:border-brand-500/30 transition-all ${
+                        lit.is_extracted ? 'cursor-pointer' : 'opacity-60'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-1">
+                        <span className="text-[10px] font-bold text-brand-400 uppercase">
+                          {lit.journal} {lit.year}
+                        </span>
+                        <div className="flex gap-2 items-center">
+                          {lit.quality_flag && lit.quality_flag !== 'OK' && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-400">
+                              {lit.quality_flag}
+                            </span>
+                          )}
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                            lit.extraction_stage === 'stage2' ? 'bg-emerald-500/10 text-emerald-400' :
+                            lit.extraction_stage === 'stage1' ? 'bg-blue-500/10 text-blue-400' :
+                            lit.extraction_stage === 'failed' ? 'bg-red-500/10 text-red-400' :
+                            'bg-slate-500/10 text-slate-400'
+                          }`}>
+                            {lit.extraction_stage === 'none' ? '未提取' :
+                             lit.extraction_stage === 'stage1' ? 'Stage1' :
+                             lit.extraction_stage === 'stage2' ? '已提取' : '失败'}
+                          </span>
+                        </div>
+                      </div>
+                      <h4 className="text-sm font-bold text-slate-200 truncate">{lit.title}</h4>
+                      {lit.authors && <p className="text-[11px] text-slate-500 truncate mt-1">{lit.authors}</p>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-16 border border-dashed border-white/10 rounded-3xl text-center">
+                  <p className="text-xs text-slate-600 uppercase tracking-widest font-bold">
+                    暂无文献，从收集箱归档或使用统一输入框添加
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Multi-Doc Chat Panel */}
+          <div className="border-l border-white/5 flex flex-col bg-slate-900/30">
+            {/* Chat header */}
+            <div className="p-4 border-b border-white/5">
+              <h3 className="text-sm font-bold text-white mb-2">项目问答</h3>
+              <p className="text-[10px] text-slate-500 mb-3">
+                已选择 {chatContextDois.length} 篇文献作为问答上下文
+              </p>
+              {/* Literature selector */}
+              <div className="max-h-32 overflow-y-auto space-y-1">
+                {projectLiterature.filter((l) => l.is_extracted).map((lit) => (
+                  <label
+                    key={lit.doi}
+                    className="flex items-center gap-2 py-1 px-2 rounded hover:bg-white/5 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={chatContextDois.includes(lit.doi)}
+                      onChange={() => toggleChatContext(lit.doi)}
+                      className="accent-brand-500 w-3 h-3"
+                    />
+                    <span className="text-[11px] text-slate-300 truncate">{lit.title || lit.doi}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Chat messages */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {chatMessages.length === 0 && (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <div className="text-3xl mb-3">💬</div>
+                    <p className="text-xs text-slate-500">选择文献后输入问题</p>
+                    <p className="text-[10px] text-slate-600 mt-1">
+                      如：这批文献中哪种钝化策略 PCE 最高？
+                    </p>
+                  </div>
+                </div>
+              )}
+              {chatMessages.map((msg) => (
+                <div key={msg.id} className={`${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
+                  <div className={`inline-block max-w-[90%] rounded-2xl p-3 ${
+                    msg.role === 'user'
+                      ? 'bg-brand-500/20 text-brand-100'
+                      : 'glass-card border-white/5 text-slate-200'
+                  }`}>
+                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+
+                    {/* Source citations */}
+                    {msg.sources && msg.sources.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-white/5">
+                        <p className="text-[9px] text-slate-500 uppercase tracking-wider mb-1">来源引用</p>
+                        {msg.sources.map((src, i) => (
+                          <div key={i} className="text-[10px] text-slate-400 mt-1 flex items-start gap-1">
+                            <span className="text-brand-400 shrink-0">
+                              {src.doi ? `[${src.doi.slice(0, 20)}...]` : ''}
+                              {src.page ? ` p.${src.page}` : ''}
+                              {src.file === 'si' ? ' (SI)' : ''}
+                            </span>
+                            <span className="truncate">{src.excerpt?.slice(0, 80)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
+              {chatStreaming && (
+                <div className="text-left">
+                  <div className="inline-block glass-card rounded-2xl p-3 border-white/5">
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <div className="w-3 h-3 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin" />
+                      思考中...
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
             </div>
-          ) : (
-            <div className="py-16 border border-dashed border-white/10 rounded-3xl text-center">
-              <p className="text-xs text-slate-600 uppercase tracking-widest font-bold">
-                暂无文献，从收集箱归档或使用统一输入框添加
-              </p>
+
+            {/* Chat input */}
+            <div className="p-4 border-t border-white/5">
+              <div className="flex gap-2">
+                <textarea
+                  value={chatQuestion}
+                  onChange={(e) => setChatQuestion(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleChatSubmit())}
+                  placeholder="输入问题，AI 将基于项目文献回答..."
+                  className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-brand-500/50 resize-none min-h-[40px] max-h-[80px]"
+                  disabled={chatStreaming}
+                  rows={1}
+                />
+                <button
+                  type="button"
+                  onClick={handleChatSubmit}
+                  disabled={chatStreaming || !chatQuestion.trim() || chatContextDois.length === 0}
+                  className="btn-primary px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                >
+                  发送
+                </button>
+              </div>
             </div>
-          )}
+          </div>
         </div>
       </div>
     );
   }
 
-  // List view
+  // ============================================================
+  // List view (unchanged)
+  // ============================================================
   return (
     <div className="h-screen bg-premium-bg overflow-y-auto p-8">
       <div className="max-w-5xl mx-auto">
-        {/* Header */}
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-white mb-1">项目枢纽</h1>
@@ -238,7 +482,6 @@ const ProjectHubPage: React.FC = () => {
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-8">
-            {/* Projects */}
             <section>
               <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
                 <span className="w-1 h-3 bg-brand-500 rounded-full" />
@@ -278,7 +521,6 @@ const ProjectHubPage: React.FC = () => {
               )}
             </section>
 
-            {/* Inbox */}
             <section>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em] flex items-center gap-2">

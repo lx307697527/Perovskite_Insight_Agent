@@ -40,6 +40,12 @@ interface AppState {
   inboxItems: Literature[];
   setInboxItems: (items: Literature[]) => void;
 
+  // Chat
+  activeChatSessionId: string | null;
+  setActiveChatSessionId: (id: string | null) => void;
+  chatContextDois: string[];
+  setChatContextDois: (dois: string[]) => void;
+
   // Toast
   toast: { message: string; type: 'info' | 'error' | 'success' } | null;
   showToast: (message: string, type?: 'info' | 'error' | 'success') => void;
@@ -85,6 +91,11 @@ export const useAppStore = create<AppState>((set) => ({
 
   inboxItems: [],
   setInboxItems: (items) => set({ inboxItems: items }),
+
+  activeChatSessionId: null,
+  setActiveChatSessionId: (id) => set({ activeChatSessionId: id }),
+  chatContextDois: [],
+  setChatContextDois: (dois) => set({ chatContextDois: dois }),
 
   toast: null,
   showToast: (message, type = 'info') => {

@@ -3,10 +3,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 interface PdfFragmentOverlayProps {
   doi: string;
   targetPage?: number | null;
+  highlightText?: string;
   onClose: () => void;
 }
 
-const PdfFragmentOverlay: React.FC<PdfFragmentOverlayProps> = ({ doi, targetPage, onClose }) => {
+const PdfFragmentOverlay: React.FC<PdfFragmentOverlayProps> = ({ doi, targetPage, highlightText, onClose }) => {
   const [currentPage, setCurrentPage] = useState(targetPage || 1);
   const [totalPages, setTotalPages] = useState<number | null>(null);
   const pdfUrl = `${import.meta.env.VITE_API_BASE || 'http://localhost:8000'}/api/pdf/${encodeURIComponent(doi)}`;
@@ -17,6 +18,27 @@ const PdfFragmentOverlay: React.FC<PdfFragmentOverlayProps> = ({ doi, targetPage
       setCurrentPage(targetPage);
     }
   }, [targetPage]);
+
+  // Attempt to highlight text in the PDF after page load
+  useEffect(() => {
+    if (!highlightText || !targetPage) return;
+
+    // The iframe PDF viewer doesn't support text selection via postMessage,
+    // but we can attempt window.find on the iframe content (same-origin only).
+    // This works for browser-native PDF viewers on same-origin.
+    const timer = setTimeout(() => {
+      try {
+        const iframe = document.querySelector('iframe[title*="PDF"]') as HTMLIFrameElement;
+        if (iframe?.contentWindow) {
+          iframe.contentWindow.find(highlightText);
+        }
+      } catch {
+        // Cross-origin or unsupported — silent fallback
+      }
+    }, 1500); // Wait for PDF to render
+
+    return () => clearTimeout(timer);
+  }, [highlightText, targetPage, currentPage]);
 
   // Handle keyboard navigation
   useEffect(() => {

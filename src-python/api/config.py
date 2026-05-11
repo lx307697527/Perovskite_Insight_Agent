@@ -238,3 +238,38 @@ async def clear_cache():
         os.makedirs(downloads_dir, exist_ok=True)
 
     return {"success": True, "data": {"message": "Cache cleared"}}
+
+
+# ============================================================
+# V1 backward-compat routes (migrated from main.py)
+# ============================================================
+
+class LegacyConfig(BaseModel):
+    apiKey: str
+    baseUrl: str
+    model: str
+
+
+@router.post("/settings")
+async def v1_update_settings(config: LegacyConfig):
+    """V1 compat: Update AI settings. Prefer POST /api/config/ai-engine for V2."""
+    from core.security import encrypt_settings
+    from core.extractor import extractor
+    from core.translator import translator
+    from core.stage1 import stage1_screener
+
+    try:
+        settings = decrypt_settings()
+        settings.update(config.model_dump())
+        encrypt_settings(settings)
+        extractor.update_config(settings)
+        translator.update_config(settings)
+        stage1_screener.update_config(settings)
+
+        # Update runtime config in main module
+        import main
+        main.current_config.update(settings)
+
+        return {"success": True, "data": {"message": "Settings updated"}}
+    except Exception as e:
+        return {"success": False, "error": str(e)}

@@ -27,6 +27,7 @@ async function fetchWithTimeout(
 
 /**
  * Search papers by query
+ * @deprecated V1 legacy — use literatureApi.addLiterature() for keyword input
  */
 export async function searchPapers(query: string, filters?: any): Promise<SearchResponse> {
   try {
@@ -58,6 +59,7 @@ export async function searchPapers(query: string, filters?: any): Promise<Search
 
 /**
  * Fetch paper details by DOI
+ * @deprecated V1 legacy — use literatureApi.getLiterature() for V2
  */
 export async function fetchPaperDetails(doi: string): Promise<PaperDetailsResponse> {
   try {
@@ -84,6 +86,7 @@ export async function fetchPaperDetails(doi: string): Promise<PaperDetailsRespon
 
 /**
  * Fetch extraction history
+ * @deprecated V1 legacy — use literatureApi.listInbox() + projectApi.getProject() for V2
  */
 export async function fetchExtractionHistory(): Promise<Paper[]> {
   try {
@@ -108,6 +111,7 @@ export async function fetchExtractionHistory(): Promise<Paper[]> {
 
 /**
  * Save settings to backend
+ * @deprecated V1 legacy — use configApi.saveAIEngine() for V2
  */
 export async function saveSettings(config: Settings): Promise<void> {
   try {
@@ -134,6 +138,7 @@ export async function saveSettings(config: Settings): Promise<void> {
 
 /**
  * Create SSE connection for extraction
+ * @deprecated V1 legacy — use extractApi.createDeepExtractionConnection() for V2
  */
 export function createExtractionConnection(doi: string): EventSource {
   return new EventSource(`${API_BASE}/api/extract/${encodeURIComponent(doi)}`);
@@ -141,6 +146,7 @@ export function createExtractionConnection(doi: string): EventSource {
 
 /**
  * Create SSE connection for local file extraction
+ * @deprecated V1 legacy — use extractApi for V2
  */
 export function createLocalExtractionConnection(path: string): EventSource {
   return new EventSource(`${API_BASE}/api/extract_local?path=${encodeURIComponent(path)}`);
@@ -155,6 +161,7 @@ export function createUploadExtractionConnection(uploadId: string): EventSource 
 
 /**
  * Upload a PDF file and get extraction via SSE
+ * @deprecated V1 legacy — use literatureApi.uploadLiterature() + extractApi for V2
  */
 export async function uploadPdfForExtraction(file: File): Promise<{ doi: string }> {
   const formData = new FormData();
@@ -182,6 +189,7 @@ export async function uploadPdfForExtraction(file: File): Promise<{ doi: string 
 
 /**
  * Export papers to Excel
+ * @deprecated V1 legacy — use compareApi.exportComparison() for V2
  */
 export function getExportUrl(dois: string[]): string {
   return `${API_BASE}/api/export/excel?dois=${dois.join(',')}`;

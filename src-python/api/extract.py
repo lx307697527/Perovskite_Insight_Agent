@@ -117,3 +117,186 @@ async def cancel_extraction(doi: str):
         tracker.cancel()
         return {"success": True, "data": {"message": "Extraction cancelled"}}
     return {"success": True, "data": {"message": "No active extraction found"}}
+
+
+# ============================================================
+# V1 backward-compat routes (migrated from main.py)
+# ============================================================
+
+import re
+import uuid
+import asyncio
+import os
+from pathlib import Path
+from fastapi import HTTPException, UploadFile, File
+
+DOI_PATTERN = re.compile(r'^10\.\d{4,9}/[-._;()/:A-Z0-9]+$', re.IGNORECASE)
+
+active_extractions = set()
+
+
+def _validate_file_path(file_path: str) -> Path:
+    """Validate file path is within allowed directories."""
+    import os
+    path = Path(file_path).resolve()
+    allowed_dir = Path(os.environ.get('APPDATA', os.path.expanduser('~'))) / 'SIA' / 'downloads'
+    try:
+        path.relative_to(allowed_dir)
+        return path
+    except ValueError:
+        legacy_dir = Path(os.environ.get('APPDATA', os.path.expanduser('~'))) / 'PIA_Agent' / 'downloads'
+        try:
+            path.relative_to(legacy_dir)
+            return path
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Access denied: file path outside allowed directory")
+
+
+@router.get("/v1/{doi:path}")
+async def v1_start_extraction(doi: str):
+    """V1 compat: Start DOI extraction via SSE (GET method).
+
+    Note: Original V1 path was GET /api/extract/{doi}, but that conflicts
+    with POST /api/extract/{doi}/deep. The main.py V1 route is preserved
+    as a thin redirect. Prefer POST /api/extract/{doi}/deep for V2.
+    """
+    if not DOI_PATTERN.match(doi):
+        raise HTTPException(status_code=400, detail="Invalid DOI format")
+
+    if doi in active_extractions:
+        async def wait_generator():
+            yield f"data: {json.dumps({'status': 'extracting', 'message': 'Already being extracted, please wait...', 'progress': 50})}\n\n"
+        return StreamingResponse(wait_generator(), media_type="text/event-stream")
+
+    active_extractions.add(doi)
+
+    from core.extractor import extractor as ext
+
+    async def event_generator():
+        try:
+            async for step in ext.process_full_paper(doi):
+                yield f"data: {json.dumps(step)}\n\n"
+        except Exception as e:
+            error_event = {
+                "status": "failed",
+                "error": str(e),
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+        finally:
+            active_extractions.discard(doi)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/local")
+async def v1_extract_local(body: dict):
+    """V1 compat: Extract from local PDF path.
+
+    Request body: { "path": "/path/to/file.pdf" }
+    """
+    path = body.get("path", "")
+    try:
+        file_path = _validate_file_path(path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if file_path.suffix.lower() != '.pdf':
+            raise HTTPException(status_code=400, detail="Invalid file type (only PDF allowed)")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid file path: {str(e)}")
+
+    from core.extractor import extractor as ext
+
+    async def event_generator():
+        try:
+            async for step in ext.process_local_pdf(str(file_path)):
+                yield f"data: {json.dumps(step)}\n\n"
+        except Exception as e:
+            error_event = {
+                "status": "failed",
+                "error": str(e),
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/upload")
+async def v1_upload_pdf(file: UploadFile = File(...)):
+    """V1 compat: Upload PDF for extraction."""
+    from core.upload_manager import upload_manager
+
+    if not file.filename or not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+
+    upload_id = f"upload_{uuid.uuid4().hex[:8]}"
+    upload_dir = Path(os.getenv('TEMP', '/tmp')) / 'sia_uploads'
+    upload_dir.mkdir(exist_ok=True)
+
+    file_path = upload_dir / f"{upload_id}.pdf"
+
+    try:
+        content = await file.read()
+        with open(file_path, 'wb') as f:
+            f.write(content)
+
+        upload_manager.register_upload(upload_id, str(file_path), file.filename)
+        return {"success": True, "data": {"doi": upload_id, "filename": file.filename}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
+
+@router.get("/upload/{upload_id}/status")
+async def v1_get_upload_status(upload_id: str):
+    """V1 compat: Get upload extraction status via SSE."""
+    from core.upload_manager import upload_manager
+    from core.extractor import extractor as ext
+
+    if not upload_manager.has_upload(upload_id):
+        raise HTTPException(status_code=404, detail="Upload not found")
+
+    if upload_manager.is_locked(upload_id):
+        async def wait_for_completion():
+            max_wait = 120
+            waited = 0
+            while upload_manager.has_upload(upload_id) and waited < max_wait:
+                await asyncio.sleep(1)
+                waited += 1
+                status = upload_manager.get_status(upload_id)
+                if status and status.get("status") == "completed":
+                    result = upload_manager.get_result(upload_id)
+                    yield f"data: {json.dumps(result)}\n\n"
+                    return
+            yield f"data: {json.dumps({'status': 'failed', 'error': 'Timeout waiting for completion'})}\n\n"
+        return StreamingResponse(wait_for_completion(), media_type="text/event-stream")
+
+    upload_manager.set_locked(upload_id, True)
+
+    status = upload_manager.get_status(upload_id)
+    file_path = Path(status["file_path"])
+
+    if not file_path.exists():
+        upload_manager.set_locked(upload_id, False)
+        raise HTTPException(status_code=404, detail="Uploaded file not found")
+
+    async def event_generator():
+        try:
+            async for step in ext.process_local_pdf(str(file_path)):
+                yield f"data: {json.dumps(step)}\n\n"
+                if step.get("status") == "completed":
+                    upload_manager.update_completed(upload_id, step)
+
+            await asyncio.sleep(2)
+            upload_manager.cleanup(upload_id)
+        except Exception as e:
+            error_event = {
+                "status": "failed",
+                "error": str(e),
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

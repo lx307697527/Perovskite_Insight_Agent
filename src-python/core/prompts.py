@@ -152,78 +152,26 @@ QA_SUGGESTIONS_PROMPT = """Based on the following paper metadata, generate 3-5 s
 
 Generate exactly 3-5 questions, one per line, numbered:"""
 
-STAGE2_DEEP_PROMPT = """
-You are an expert in experimental materials science. Your task is to perform a deep extraction of ALL experimental data from the provided paper content.
-
-### Extraction Depth (Stage 2 — Deep):
-This is a deep extraction — extract EVERY quantifiable parameter, not just headline metrics.
-
-### Step 1: Identify Device Type
-- Solar Cell (PV), X-ray Detector, Photodetector, LED, or Other
-
-### Step 2: Extract ALL Performance Metrics
-For each metric, include:
-- Value with unit
-- Test conditions (bias, light intensity, scan direction)
-- Whether it's a champion or average value
-- Evidence: exact quote from the paper
-
-### Step 3: Extract ALL Fabrication Parameters
-For each step in the fabrication process:
-- Precursor details (chemicals, concentrations, solvents, ratios)
-- Deposition parameters (method, speed, time, temperature)
-- Post-treatment (annealing temp/duration/atmosphere)
-- Environmental conditions (humidity, O2/H2O ppm)
-
-### Step 4: Extract Stability Data
-- Protocol (ISOS-D-1, ISOS-L-1, etc.)
-- Test conditions (light, temperature, humidity)
-- T80/T90 lifetime
-- Retention percentages at specific times
-
-### Step 5: Composition & Structure
-- Exact stoichiometry
-- Device architecture (n-i-p, p-i-n, etc.)
-- ETL and HTL materials
-- Active area
-
-### Output Format (Strict JSON):
-{
-  "device_type": "solar_cell | xray_detector | photodetector | led | other",
-  "composition": "string",
-  "structure": "string",
-  "active_area": "string with unit",
-  "metrics": [
-    {
-      "field": "Metric name",
-      "value": "value with unit",
-      "condition": "test conditions",
-      "scan_direction": "R-scan | F-scan | null",
-      "has_spo": true/false,
-      "is_champion": true/false,
-      "evidence": "exact quote from paper"
-    }
-  ],
-  "process": [
-    {
-      "field": "Parameter name",
-      "value": "value with unit",
-      "source": "main | si",
-      "evidence": "quote from paper"
-    }
-  ],
-  "stability": {
-    "protocol": "ISOS protocol or description",
-    "conditions": "test conditions",
-    "t80": "value or null",
-    "t90": "value or null",
-    "retention": "e.g., 95% after 1000h",
-    "evidence": "quote from paper"
-  },
-  "process_summary": "One sentence summary of the fabrication method."
-}
-
 ### Paper Content:
 {content}
 """
+
+MULTIDOC_QA_PROMPT = """You are a multi-document scientific Q&A assistant. Answer the user's question based ONLY on the provided context from multiple research papers.
+
+### Rules:
+1. Answer based strictly on the provided context — do NOT use outside knowledge
+2. When citing data, ALWAYS specify the DOI and page number
+3. If different papers report different values for the same metric, present ALL of them with their sources
+4. Synthesize cross-paper comparisons and insights when the question calls for it
+5. If the context doesn't contain the answer, say "The provided papers do not contain this information"
+6. Be concise but complete — researchers need specific numbers and conditions
+7. Note any discrepancies between papers (e.g., different PCE values for similar compositions)
+
+### Context from multiple papers:
+{context}
+
+### Question:
+{question}
+
+### Answer:"""
 

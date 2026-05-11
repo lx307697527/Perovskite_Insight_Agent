@@ -284,3 +284,210 @@ async def move_from_inbox(doi: str, body: MoveToProjectRequest):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
+
+
+# ============================================================
+# V1 backward-compat routes (migrated from main.py)
+# ============================================================
+
+@router.get("/paper/{doi:path}")
+async def v1_get_paper_details(doi: str):
+    """V1 compat: Fetch full paper details for the details page."""
+    if doi.startswith("upload_"):
+        from core.upload_manager import upload_manager
+        result_data = upload_manager.get_result(doi)
+        if not result_data:
+            raise HTTPException(status_code=404, detail="Upload result not found or extraction incomplete")
+
+        metrics = result_data.get("metrics", [])
+        process = result_data.get("process", [])
+
+        formatted_metrics = []
+        if isinstance(metrics, list):
+            for m in metrics:
+                formatted_metrics.append({
+                    "label": m.get("field", "Unknown"),
+                    "value": m.get("value", "N/A"),
+                    "unit": "",
+                    "evidence": m.get("evidence", ""),
+                    "condition": m.get("condition", "")
+                })
+
+        formatted_process = []
+        if isinstance(process, list):
+            for p in process:
+                formatted_process.append({
+                    "field": p.get("field", "Unknown"),
+                    "value": p.get("value", "N/A"),
+                    "source": p.get("source", "main"),
+                    "evidence": p.get("evidence", "")
+                })
+
+        return {
+            "success": True,
+            "data": {
+                "title": result_data.get("title", "Uploaded PDF"),
+                "journal": "Local File",
+                "year": 2024,
+                "authors": "Uploaded by user",
+                "abstract": result_data.get("process_summary", "No abstract available for uploaded files."),
+                "metrics": formatted_metrics,
+                "process": formatted_process,
+                "is_extracted": True,
+                "device_type": result_data.get("device_type", "unknown"),
+                "composition": result_data.get("composition", "Unknown"),
+                "structure": result_data.get("structure", "Unknown")
+            }
+        }
+
+    if not DOI_PATTERN.match(doi):
+        raise HTTPException(status_code=400, detail="Invalid DOI format")
+
+    db = SessionLocal()
+    try:
+        from core.crawler import crawler
+        paper = db.query(Literature).filter(Literature.doi == doi).first()
+
+        if not paper:
+            basic_info = await crawler.get_paper_by_doi(doi)
+            if basic_info:
+                return {
+                    "success": True,
+                    "data": {
+                        "title": basic_info.get("title", "Unknown Title"),
+                        "journal": basic_info.get("journal", "Unknown Journal"),
+                        "year": basic_info.get("year", 2024),
+                        "authors": basic_info.get("authors", "Unknown Authors"),
+                        "abstract": basic_info.get("abstract") or "No abstract available.",
+                        "metrics": [],
+                        "process": [],
+                        "is_extracted": False
+                    }
+                }
+            return {"success": False, "error": "Paper not found", "code": "PAPER_NOT_FOUND"}
+
+        is_placeholder = paper.title.startswith("Auto-extracted") or not paper.abstract or paper.abstract == "No abstract available."
+        if is_placeholder:
+            paper_info = await crawler.get_paper_by_doi(doi)
+            if paper_info:
+                paper.title = paper_info.get('title', paper.title)
+                paper.abstract = paper_info.get('abstract', paper.abstract)
+                paper.authors = paper_info.get('authors', paper.authors)
+                paper.journal = paper_info.get('journal', paper.journal)
+                paper.year = paper_info.get('year', paper.year)
+                db.commit()
+                db.refresh(paper)
+
+        import json as _json
+        evidence_map = _json.loads(paper.source_mapping) if paper.source_mapping else {}
+
+        metrics = []
+        if paper.is_extracted:
+            process_data = _json.loads(paper.process_params) if paper.process_params else {}
+            perf_data = _json.loads(paper.performance_data) if paper.performance_data else {}
+
+            if isinstance(process_data, dict) and 'metrics' in process_data:
+                metrics = process_data['metrics']
+            elif perf_data:
+                metrics = [
+                    {"label": "PCE", "value": perf_data.get("pce", "N/A"), "unit": "%", "evidence": evidence_map.get("PCE")},
+                    {"label": "Voc", "value": perf_data.get("voc", "N/A"), "unit": "V", "evidence": evidence_map.get("Voc")},
+                    {"label": "Jsc", "value": perf_data.get("jsc", "N/A"), "unit": "mA/cm²", "evidence": evidence_map.get("Jsc")},
+                    {"label": "FF", "value": perf_data.get("ff", "N/A"), "unit": "%", "evidence": evidence_map.get("FF")}
+                ]
+
+        return {
+            "success": True,
+            "data": {
+                "title": paper.title,
+                "journal": paper.journal,
+                "year": paper.year,
+                "authors": paper.authors,
+                "abstract": paper.abstract or "Abstract not available.",
+                "metrics": metrics,
+                "process": _json.loads(paper.process_params) if paper.process_params and paper.is_extracted else [],
+                "is_extracted": paper.is_extracted
+            }
+        }
+    finally:
+        db.close()
+
+
+@router.post("/translate")
+async def v1_translate_abstract(request: dict):
+    """V1 compat: Translate text."""
+    from core.translator import translator
+    text = request.get("text")
+    if not text:
+        return {"success": False, "error": "No text provided"}
+    translated = await translator.translate_text(text)
+    return {"success": True, "data": translated}
+
+
+@router.get("/history")
+async def v1_get_search_history():
+    """V1 compat: Get search/extraction history."""
+    import datetime as _dt
+    from core.upload_manager import upload_manager
+
+    db = SessionLocal()
+    try:
+        papers = db.query(Literature).order_by(Literature.created_at.desc()).limit(20).all()
+        history_data = [
+            {
+                "doi": p.doi,
+                "title": p.title,
+                "journal": p.journal,
+                "year": p.year,
+                "authors": p.authors,
+                "is_extracted": p.is_extracted,
+                "created_at": p.created_at.isoformat() if p.created_at else None
+            } for p in papers
+        ]
+        return {"success": True, "data": history_data}
+    finally:
+        db.close()
+
+
+@router.delete("/history/clear")
+async def v1_clear_all_history():
+    """V1 compat: Clear all history and extracted data."""
+    from core.database import QuickQuestion, SIFile
+
+    db = SessionLocal()
+    try:
+        db.query(QuickQuestion).delete()
+        db.query(SIFile).delete()
+        db.query(Literature).delete()
+        db.commit()
+        from core.crawler import crawler
+        crawler.clear_downloads()
+        return {"success": True, "message": "All history and files cleared"}
+    except Exception as e:
+        db.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        db.close()
+
+
+@router.get("/pdf/{doi:path}")
+async def v1_get_pdf(doi: str):
+    """V1 compat: Serve PDF file."""
+    import os as _os
+    from fastapi.responses import FileResponse
+    from core.crawler import crawler
+
+    if doi.startswith("upload_"):
+        from core.upload_manager import upload_manager
+        file_path = upload_manager.get_file_path(doi)
+        if not file_path or not _os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Uploaded PDF not found or has been cleaned up.")
+        return FileResponse(file_path, media_type="application/pdf")
+
+    safe_filename = doi.replace("/", "_").replace("\\", "_") + ".pdf"
+    file_path = _os.path.join(crawler.download_dir, safe_filename)
+
+    if not _os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="PDF not found. Please run extraction first.")
+
+    return FileResponse(file_path, media_type="application/pdf")
