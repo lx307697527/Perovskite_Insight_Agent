@@ -20,6 +20,10 @@ const OnboardingPage: React.FC = () => {
   const [stage1Model, setStage1Model] = useState('');
   const [stage2Model, setStage2Model] = useState('');
 
+  // Connectivity test
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [testMessage, setTestMessage] = useState<string | null>(null);
+
   // Step 2: Proxy
   const [proxyUrl, setProxyUrl] = useState('');
   const [cookieHeader, setCookieHeader] = useState('');
@@ -108,6 +112,60 @@ const OnboardingPage: React.FC = () => {
   const handleSkip = () => {
     setNeedsOnboarding(false);
     navigate('/home', { replace: true });
+  };
+
+  // Independent connectivity test (GAP-001 fix)
+  const handleTestConnectivity = async () => {
+    if (!apiKey.trim()) {
+      setTestMessage('请先填写 API Key');
+      setTestStatus('error');
+      return;
+    }
+    if (!baseUrl.trim()) {
+      setTestMessage('请先填写 Base URL');
+      setTestStatus('error');
+      return;
+    }
+
+    setTestStatus('testing');
+    setTestMessage(null);
+
+    try {
+      const cleanBaseUrl = baseUrl.trim().replace(/\/+$/, '');
+      const resp = await fetch(`${cleanBaseUrl}/models`, {
+        headers: { Authorization: `Bearer ${apiKey.trim()}` },
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (resp.status === 401) {
+        setTestMessage('API Key 验证失败，请检查 Key 是否正确');
+        setTestStatus('error');
+        return;
+      }
+
+      if (!resp.ok && resp.status !== 200) {
+        setTestMessage(`连接失败: ${resp.statusText}`);
+        setTestStatus('error');
+        return;
+      }
+
+      setTestMessage('连接成功，API 配置有效');
+      setTestStatus('success');
+      setTimeout(() => {
+        setTestStatus('idle');
+        setTestMessage(null);
+      }, 3000);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : '连接失败';
+      if (errorMsg.includes('abort') || errorMsg.includes('timeout')) {
+        setTestMessage('连接超时，请检查网络或代理设置');
+      } else if (errorMsg.includes('fetch') || errorMsg.includes('network')) {
+        setTestMessage(`无法连接到 ${baseUrl}，请检查 Base URL`);
+      } else {
+        setTestMessage(errorMsg);
+      }
+      setTestStatus('error');
+    }
   };
 
   return (
@@ -227,6 +285,45 @@ const OnboardingPage: React.FC = () => {
               <p className="text-[11px] text-slate-600">
                 支持所有 OpenAI 兼容 API（DeepSeek、OpenAI、本地 Ollama 等）
               </p>
+
+              {/* Connectivity Test Button (GAP-001 fix) */}
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={handleTestConnectivity}
+                  disabled={testStatus === 'testing'}
+                  className="w-full py-2.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-sm font-bold text-slate-300 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {testStatus === 'testing' ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      测试中...
+                    </>
+                  ) : testStatus === 'success' ? (
+                    <>
+                      <span className="text-emerald-400">✓</span>
+                      连接成功
+                    </>
+                  ) : testStatus === 'error' ? (
+                    <>
+                      <span className="text-red-400">✕</span>
+                      测试失败
+                    </>
+                  ) : (
+                    <>
+                      <span>🔌</span>
+                      测试连通性
+                    </>
+                  )}
+                </button>
+                {testMessage && (
+                  <p className={`text-xs mt-2 ${
+                    testStatus === 'success' ? 'text-emerald-400' : 'text-red-400'
+                  }`}>
+                    {testMessage}
+                  </p>
+                )}
+              </div>
             </div>
           )}
 
