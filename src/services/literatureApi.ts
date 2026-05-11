@@ -87,3 +87,16 @@ export async function moveFromInbox(doi: string, projectId: string): Promise<{ m
     body: JSON.stringify({ project_id: projectId }),
   });
 }
+
+/**
+ * Start extraction for a literature item.
+ */
+export async function startExtraction(doi: string): Promise<void> {
+  const resp = await fetch(`${API_BASE}/api/extract/${encodeURIComponent(doi)}/stage1`, {
+    method: 'POST',
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok && !resp.headers.get('content-type')?.includes('text/event-stream')) {
+    throw new Error(data.detail || data.error || 'Failed to start extraction');
+  }
+}

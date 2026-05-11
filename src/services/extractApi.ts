@@ -181,3 +181,17 @@ export async function cancelExtraction(doi: string): Promise<void> {
   const data = await resp.json();
   if (!data.success) throw new Error(data.error || 'Cancel failed');
 }
+
+/**
+ * Start extraction for a DOI (triggers Stage1 extraction).
+ */
+export async function startExtraction(doi: string): Promise<void> {
+  const resp = await fetch(`${API_BASE}/api/extract/${encodeURIComponent(doi)}/stage1`, {
+    method: 'POST',
+  });
+  const data = await resp.json().catch(() => ({}));
+  // If response is not OK but not a stream, throw error
+  if (!resp.ok && !resp.headers.get('content-type')?.includes('text/event-stream')) {
+    throw new Error(data.detail || data.error || 'Failed to start extraction');
+  }
+}

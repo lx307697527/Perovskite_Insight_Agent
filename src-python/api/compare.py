@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api", tags=["compare"])
 
 
 class ExportRequest(BaseModel):
-    format: str  # excel, csv, latex, png
+    format: str  # excel, csv, latex, png, svg
     dois: Optional[list[str]] = None
     view_mode: Optional[str] = "metrics"  # metrics | literature
 
@@ -295,7 +295,7 @@ async def get_compare_data(
 async def export_comparison(project_id: str, body: ExportRequest):
     """Export comparison data in specified format.
 
-    Supported formats: excel, csv, latex, png
+    Supported formats: excel, csv, latex, png, svg
     """
     # Build data first
     data_result = _build_comparison_data(
@@ -319,6 +319,8 @@ async def export_comparison(project_id: str, body: ExportRequest):
         return _export_latex(data, warnings)
     elif fmt == "png":
         return _export_png(data, warnings)
+    elif fmt == "svg":
+        return _export_svg(data, warnings)
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported export format: {fmt}")
 
@@ -511,6 +513,69 @@ def _export_png(data: dict, warnings: dict) -> StreamingResponse:
         output,
         media_type="image/png",
         headers={"Content-Disposition": "attachment; filename=comparison.png"},
+    )
+
+
+def _export_svg(data: dict, warnings: dict) -> StreamingResponse:
+    """Export as SVG image using matplotlib (GAP-007)."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        raise HTTPException(status_code=500, detail="matplotlib not installed")
+
+    columns = data.get("columns", [])
+    rows = data.get("rows", [])
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="No data to export")
+
+    fig, ax = plt.subplots(figsize=(max(8, len(columns) * 2), max(4, len(rows) * 0.5 + 1)))
+    ax.axis('off')
+
+    # Prepare table data
+    cell_text = []
+    cell_colors = []
+    for row in rows:
+        text_row = []
+        color_row = []
+        for col in columns:
+            val = str(row.get(col, ""))
+            if len(val) > 30:
+                val = val[:28] + ".."
+            text_row.append(val)
+
+            # Color coding based on quality warnings
+            doi = row.get("DOI", "")
+            if col in warnings.get(doi, {}):
+                color_row.append([1.0, 0.95, 0.9])  # light orange
+            else:
+                color_row.append([1, 1, 1])  # white
+        cell_text.append(text_row)
+        cell_colors.append(color_row)
+
+    table = ax.table(
+        cellText=cell_text,
+        colLabels=columns,
+        cellColours=cell_colors,
+        loc='center',
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1.2, 1.5)
+
+    plt.tight_layout()
+
+    output = io.BytesIO()
+    fig.savefig(output, format='svg', bbox_inches='tight')
+    plt.close(fig)
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="image/svg+xml",
+        headers={"Content-Disposition": "attachment; filename=comparison.svg"},
     )
 
 

@@ -4,6 +4,7 @@ import { useAppStore } from '../store';
 import * as projectApi from '../services/projectApi';
 import * as literatureApi from '../services/literatureApi';
 import * as chatApi from '../services/chatApi';
+import * as extractApi from '../services/extractApi';
 import type { Project, Literature } from '../types';
 import type { ChatSSEEvent } from '../services/chatApi';
 
@@ -48,6 +49,15 @@ const ProjectHubPage: React.FC = () => {
   const [chatLoading, setChatLoading] = useState(false);
   const chatCleanupRef = useRef<(() => void) | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Cross-project selection state (GAP-002)
+  const [showCrossProjectModal, setShowCrossProjectModal] = useState(false);
+  const [crossProjectLiterature, setCrossProjectLiterature] = useState<Literature[]>([]);
+  const [selectedCrossDois, setSelectedCrossDois] = useState<string[]>([]);
+
+  // Batch operations state (GAP-003)
+  const [selectedProjectLiterature, setSelectedProjectLiterature] = useState<string[]>([]);
+  const [batchOperating, setBatchOperating] = useState(false);
 
   const isMounted = useRef(true);
 
@@ -248,6 +258,88 @@ const ProjectHubPage: React.FC = () => {
     );
   };
 
+  // Cross-project literature selection (GAP-002)
+  const loadCrossProjectLiterature = async () => {
+    try {
+      // Load all literature from all projects
+      const allLiterature: Literature[] = [];
+      for (const proj of projects) {
+        if (proj.id !== projectId) {
+          const detail = await projectApi.getProject(proj.id);
+          if (detail.literature) {
+            allLiterature.push(...detail.literature.filter((l: Literature) => l.is_extracted));
+          }
+        }
+      }
+      setCrossProjectLiterature(allLiterature);
+    } catch (err) {
+      console.error('Failed to load cross-project literature:', err);
+    }
+  };
+
+  const toggleCrossProjectSelection = (doi: string) => {
+    setSelectedCrossDois((prev) =>
+      prev.includes(doi) ? prev.filter((d) => d !== doi) : [...prev, doi]
+    );
+  };
+
+  const addCrossProjectToContext = () => {
+    setChatContextDois((prev) => [...new Set([...prev, ...selectedCrossDois])]);
+    setSelectedCrossDois([]);
+    setShowCrossProjectModal(false);
+  };
+
+  // Batch operations (GAP-003)
+  const toggleProjectLiteratureSelection = (doi: string) => {
+    setSelectedProjectLiterature((prev) =>
+      prev.includes(doi) ? prev.filter((d) => d !== doi) : [...prev, doi]
+    );
+  };
+
+  const selectAllProjectLiterature = () => {
+    setSelectedProjectLiterature(projectLiterature.map((l) => l.doi));
+  };
+
+  const clearProjectLiteratureSelection = () => {
+    setSelectedProjectLiterature([]);
+  };
+
+  const handleBatchExtract = async () => {
+    if (selectedProjectLiterature.length === 0) return;
+    setBatchOperating(true);
+    try {
+      let successCount = 0;
+      for (const doi of selectedProjectLiterature) {
+        try {
+          await extractApi.startExtraction(doi);
+          successCount++;
+        } catch {
+          console.error(`Failed to start extraction for ${doi}`);
+        }
+      }
+      showToast(`已启动 ${successCount} 篇文献的提取任务`, 'success');
+      setSelectedProjectLiterature([]);
+      loadData();
+    } finally {
+      setBatchOperating(false);
+    }
+  };
+
+  const handleBatchAddToCompare = () => {
+    if (selectedProjectLiterature.length === 0) return;
+    const { toggleComparisonDoi } = useAppStore.getState();
+    // Add each DOI to comparison (toggle adds if not present)
+    selectedProjectLiterature.forEach((doi) => {
+      const { comparisonDois } = useAppStore.getState();
+      if (!comparisonDois.includes(doi)) {
+        toggleComparisonDoi(doi);
+      }
+    });
+    showToast(`已添加 ${selectedProjectLiterature.length} 篇文献到对比`, 'success');
+    setSelectedProjectLiterature([]);
+    navigate(`/projects/${projectId}/compare`);
+  };
+
   // ============================================================
   // Detail view with Multi-Doc Chat
   // ============================================================
@@ -293,47 +385,110 @@ const ProjectHubPage: React.FC = () => {
               </div>
 
               {/* Literature list */}
-              <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em] mb-4">
-                项目文献
-              </h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em]">
+                  项目文献
+                </h3>
+                {projectLiterature.length > 0 && (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={selectAllProjectLiterature}
+                      className="text-[10px] text-slate-500 hover:text-brand-400 transition-colors"
+                    >
+                      全选
+                    </button>
+                    {selectedProjectLiterature.length > 0 && (
+                      <>
+                        <span className="text-slate-700">|</span>
+                        <button
+                          type="button"
+                          onClick={clearProjectLiteratureSelection}
+                          className="text-[10px] text-slate-500 hover:text-brand-400 transition-colors"
+                        >
+                          取消选择
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Batch operations toolbar (GAP-003) */}
+              {selectedProjectLiterature.length > 0 && (
+                <div className="glass-card rounded-xl p-3 mb-4 border-brand-500/30 bg-brand-500/5 flex items-center justify-between">
+                  <span className="text-xs text-brand-400 font-bold">
+                    已选择 {selectedProjectLiterature.length} 篇
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleBatchExtract}
+                      disabled={batchOperating}
+                      className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-slate-300 hover:border-brand-500/30 transition-all disabled:opacity-50"
+                    >
+                      {batchOperating ? '处理中...' : '批量提取'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleBatchAddToCompare}
+                      className="px-3 py-1.5 rounded-lg bg-brand-500/20 border border-brand-500/30 text-xs text-brand-400 hover:bg-brand-500/30 transition-all"
+                    >
+                      加入对比
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {projectLiterature.length > 0 ? (
                 <div className="space-y-3">
                   {projectLiterature.map((lit) => (
                     <div
                       key={lit.doi}
-                      onClick={() => {
-                        if (lit.is_extracted) {
-                          navigate(`/details/${lit.doi}`);
-                        }
-                      }}
-                      className={`glass-card p-4 rounded-2xl border-white/5 hover:border-brand-500/30 transition-all ${
-                        lit.is_extracted ? 'cursor-pointer' : 'opacity-60'
+                      className={`glass-card p-4 rounded-2xl border transition-all flex items-start gap-3 ${
+                        selectedProjectLiterature.includes(lit.doi) ? 'border-brand-500/40 bg-brand-500/5' : 'border-white/5 hover:border-brand-500/30'
                       }`}
                     >
-                      <div className="flex justify-between items-start mb-1">
-                        <span className="text-[10px] font-bold text-brand-400 uppercase">
-                          {lit.journal} {lit.year}
-                        </span>
-                        <div className="flex gap-2 items-center">
-                          {lit.quality_flag && lit.quality_flag !== 'OK' && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-400">
-                              {lit.quality_flag}
-                            </span>
-                          )}
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                            lit.extraction_stage === 'stage2' ? 'bg-emerald-500/10 text-emerald-400' :
-                            lit.extraction_stage === 'stage1' ? 'bg-blue-500/10 text-blue-400' :
-                            lit.extraction_stage === 'failed' ? 'bg-red-500/10 text-red-400' :
-                            'bg-slate-500/10 text-slate-400'
-                          }`}>
-                            {lit.extraction_stage === 'none' ? '未提取' :
-                             lit.extraction_stage === 'stage1' ? 'Stage1' :
-                             lit.extraction_stage === 'stage2' ? '已提取' : '失败'}
+                      <input
+                        type="checkbox"
+                        checked={selectedProjectLiterature.includes(lit.doi)}
+                        onChange={() => toggleProjectLiteratureSelection(lit.doi)}
+                        title={`选择 ${lit.title || lit.doi}`}
+                        className="mt-1 accent-brand-500 shrink-0"
+                      />
+                      <div
+                        className="flex-1 min-w-0 cursor-pointer"
+                        onClick={() => {
+                          if (lit.is_extracted) {
+                            navigate(`/details/${lit.doi}`);
+                          }
+                        }}
+                      >
+                        <div className="flex justify-between items-start mb-1">
+                          <span className="text-[10px] font-bold text-brand-400 uppercase">
+                            {lit.journal} {lit.year}
                           </span>
+                          <div className="flex gap-2 items-center">
+                            {lit.quality_flag && lit.quality_flag !== 'OK' && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-400">
+                                {lit.quality_flag}
+                              </span>
+                            )}
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                              lit.extraction_stage === 'stage2' ? 'bg-emerald-500/10 text-emerald-400' :
+                              lit.extraction_stage === 'stage1' ? 'bg-blue-500/10 text-blue-400' :
+                              lit.extraction_stage === 'failed' ? 'bg-red-500/10 text-red-400' :
+                              'bg-slate-500/10 text-slate-400'
+                            }`}>
+                              {lit.extraction_stage === 'none' ? '未提取' :
+                               lit.extraction_stage === 'stage1' ? 'Stage1' :
+                               lit.extraction_stage === 'stage2' ? '已提取' : '失败'}
+                            </span>
+                          </div>
                         </div>
+                        <h4 className="text-sm font-bold text-slate-200 truncate">{lit.title}</h4>
+                        {lit.authors && <p className="text-[11px] text-slate-500 truncate mt-1">{lit.authors}</p>}
                       </div>
-                      <h4 className="text-sm font-bold text-slate-200 truncate">{lit.title}</h4>
-                      {lit.authors && <p className="text-[11px] text-slate-500 truncate mt-1">{lit.authors}</p>}
                     </div>
                   ))}
                 </div>
@@ -351,7 +506,19 @@ const ProjectHubPage: React.FC = () => {
           <div className="border-l border-white/5 flex flex-col bg-slate-900/30">
             {/* Chat header */}
             <div className="p-4 border-b border-white/5">
-              <h3 className="text-sm font-bold text-white mb-2">项目问答</h3>
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="text-sm font-bold text-white">项目问答</h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    loadCrossProjectLiterature();
+                    setShowCrossProjectModal(true);
+                  }}
+                  className="text-[10px] text-brand-400 hover:text-brand-300 transition-colors font-bold"
+                >
+                  + 跨项目选文献
+                </button>
+              </div>
               <p className="text-[10px] text-slate-500 mb-3">
                 已选择 {chatContextDois.length} 篇文献作为问答上下文
               </p>
@@ -452,6 +619,81 @@ const ProjectHubPage: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* Cross-project literature selection modal (GAP-002) */}
+        {showCrossProjectModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowCrossProjectModal(false)} />
+            <div className="relative glass-card w-full max-w-2xl max-h-[80vh] rounded-3xl p-6 border-white/10 shadow-2xl flex flex-col">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold text-white">跨项目选择文献</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowCrossProjectModal(false)}
+                  className="text-slate-400 hover:text-white transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="text-xs text-slate-500 mb-4">
+                从其他项目选择已提取文献加入当前问答上下文
+              </p>
+              <div className="flex-1 overflow-y-auto space-y-2 min-h-[200px]">
+                {crossProjectLiterature.length > 0 ? (
+                  crossProjectLiterature.map((lit) => (
+                    <label
+                      key={lit.doi}
+                      className={`flex items-start gap-3 p-3 rounded-xl cursor-pointer transition-all ${
+                        selectedCrossDois.includes(lit.doi)
+                          ? 'bg-brand-500/10 border border-brand-500/30'
+                          : 'bg-white/5 border border-transparent hover:border-white/10'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedCrossDois.includes(lit.doi)}
+                        onChange={() => toggleCrossProjectSelection(lit.doi)}
+                        className="mt-1 accent-brand-500 shrink-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[10px] text-brand-400 uppercase mb-0.5">
+                          {lit.journal} {lit.year}
+                        </div>
+                        <div className="text-sm text-slate-200 truncate">{lit.title || lit.doi}</div>
+                      </div>
+                    </label>
+                  ))
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-xs text-slate-600">其他项目暂无已提取文献</p>
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-between items-center mt-4 pt-4 border-t border-white/5">
+                <span className="text-xs text-slate-500">
+                  已选择 {selectedCrossDois.length} 篇
+                </span>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowCrossProjectModal(false)}
+                    className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-slate-300 font-bold text-sm hover:bg-white/10 transition-all"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addCrossProjectToContext}
+                    disabled={selectedCrossDois.length === 0}
+                    className="px-4 py-2 rounded-xl btn-primary font-bold text-sm disabled:opacity-50"
+                  >
+                    添加到上下文
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

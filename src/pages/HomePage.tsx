@@ -199,8 +199,46 @@ const HomePage: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-2 ml-3 shrink-0">
+                  {/* Quick action buttons (GAP-005) */}
+                  {item.is_extracted && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedDoi(item.doi);
+                        navigate(`/insight/${item.doi}`);
+                      }}
+                      className="text-[10px] text-brand-400 hover:text-brand-300 transition-colors font-bold px-2 py-1 rounded border border-brand-500/20 hover:border-brand-500/40 bg-brand-500/5"
+                      title="精准问答"
+                    >
+                      问答
+                    </button>
+                  )}
+                  {!item.is_extracted && (
+                    <button
+                      type="button"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        try {
+                          await literatureApi.startExtraction(item.doi);
+                          showToast('已启动提取任务', 'success');
+                          loadData();
+                        } catch {
+                          showToast('启动提取失败', 'error');
+                        }
+                      }}
+                      className="text-[10px] text-emerald-400 hover:text-emerald-300 transition-colors font-bold px-2 py-1 rounded border border-emerald-500/20 hover:border-emerald-500/40 bg-emerald-500/5"
+                      title="开始提取"
+                    >
+                      提取
+                    </button>
+                  )}
                   <button
-                    onClick={() => setMoveModalDoi(item.doi)}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMoveModalDoi(item.doi);
+                    }}
                     className="text-[10px] text-slate-500 hover:text-brand-400 transition-colors font-bold px-2 py-1 rounded border border-white/5 hover:border-brand-500/30"
                     title="收纳到项目"
                   >

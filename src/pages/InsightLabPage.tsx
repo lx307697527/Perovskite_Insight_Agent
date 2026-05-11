@@ -14,6 +14,21 @@ interface QASession {
   events: QASSEEvent[];
 }
 
+interface ExtractedMetric {
+  label: string;
+  value: string | number;
+  unit?: string;
+  scan_direction?: string;
+  has_spo?: boolean;
+  evidence?: string;
+}
+
+interface StructuredData {
+  performance: ExtractedMetric[];
+  process: { field: string; value: string; source?: string }[];
+  stability?: { metric: string; value: string; protocol?: string }[];
+}
+
 const InsightLabPage: React.FC = () => {
   const { doi: urlDoi } = useParams<{ doi: string }>();
   const navigate = useNavigate();
@@ -25,6 +40,9 @@ const InsightLabPage: React.FC = () => {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [history, setHistory] = useState<QuickQuestion[]>([]);
   const [literature, setLiterature] = useState<Literature | null>(null);
+
+  // Structured extraction data (GAP-006)
+  const [structuredData, setStructuredData] = useState<StructuredData | null>(null);
 
   // Q&A sessions (multi-turn)
   const [qaSessions, setQaSessions] = useState<QASession[]>([]);
@@ -64,7 +82,21 @@ const InsightLabPage: React.FC = () => {
         getExtractionStatus(targetDoi).catch(() => null),
       ]);
       if (isMounted.current) {
-        if (lit) setLiterature(lit);
+        if (lit) {
+          setLiterature(lit);
+          // Parse structured data from literature (GAP-006)
+          if (lit.is_extracted) {
+            const perf = lit.performance_data ? JSON.parse(lit.performance_data) : null;
+            const proc = lit.process_data ? JSON.parse(lit.process_data) : null;
+            if (perf || proc) {
+              setStructuredData({
+                performance: perf?.metrics || [],
+                process: proc?.steps || [],
+                stability: perf?.stability || [],
+              });
+            }
+          }
+        }
         setSuggestions(sug);
         setHistory(hist);
         if (status) setExtractionStage(status.stage);
@@ -301,6 +333,93 @@ const InsightLabPage: React.FC = () => {
                   event={extractionEvent}
                   onCancel={isExtracting ? handleCancelExtraction : undefined}
                 />
+              )}
+
+              {/* Structured Extraction Cards (GAP-006) */}
+              {structuredData && extractionStage === 'stage2' && (
+                <div className="space-y-4">
+                  {/* Performance Metrics Card */}
+                  {structuredData.performance && structuredData.performance.length > 0 && (
+                    <div className="glass-card rounded-2xl p-5 border-white/5">
+                      <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <span className="w-1 h-3 bg-emerald-500 rounded-full" />
+                        性能指标
+                      </h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        {structuredData.performance.map((metric, idx) => (
+                          <div key={idx} className="bg-white/5 rounded-xl p-3">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <span className="text-[10px] font-bold text-slate-500 uppercase">{metric.label}</span>
+                              {metric.scan_direction && (
+                                <span className="text-[8px] px-1 py-0.5 rounded bg-brand-500/20 text-brand-400">
+                                  {metric.scan_direction}
+                                </span>
+                              )}
+                              {metric.has_spo && (
+                                <span className="text-[8px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-400">SPO</span>
+                              )}
+                            </div>
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-xl font-bold text-white">{metric.value}</span>
+                              {metric.unit && <span className="text-xs text-slate-400">{metric.unit}</span>}
+                            </div>
+                            {metric.evidence && (
+                              <p className="text-[9px] text-slate-600 mt-1 truncate" title={metric.evidence}>
+                                📍 {metric.evidence.slice(0, 50)}...
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Process Parameters Card */}
+                  {structuredData.process && structuredData.process.length > 0 && (
+                    <div className="glass-card rounded-2xl p-5 border-white/5">
+                      <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <span className="w-1 h-3 bg-blue-500 rounded-full" />
+                        工艺参数
+                      </h4>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        {structuredData.process.map((step, idx) => (
+                          <div key={idx} className="bg-white/5 rounded-lg p-3">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase">{step.field}</span>
+                            <p className="text-sm text-slate-200 mt-1">{step.value}</p>
+                            {step.source && (
+                              <span className="text-[9px] text-slate-600">{step.source === 'si' ? '📄 SI' : '📄 正文'}</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Stability Data Card */}
+                  {structuredData.stability && structuredData.stability.length > 0 && (
+                    <div className="glass-card rounded-2xl p-5 border-white/5">
+                      <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <span className="w-1 h-3 bg-amber-500 rounded-full" />
+                        稳定性数据
+                      </h4>
+                      <div className="space-y-2">
+                        {structuredData.stability.map((item, idx) => (
+                          <div key={idx} className="flex items-center justify-between bg-white/5 rounded-lg p-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm text-slate-200">{item.metric}</span>
+                              {item.protocol && (
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">
+                                  {item.protocol}
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-sm font-bold text-white">{item.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
 
               {/* Question Input */}

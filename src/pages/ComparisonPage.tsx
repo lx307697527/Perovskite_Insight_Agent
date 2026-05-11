@@ -5,6 +5,14 @@ import * as compareApi from '../services/compareApi';
 import * as api from '../services/api';
 import type { ComparisonFilters, ComparisonData, QualityWarning } from '../services/compareApi';
 
+interface CustomMetric {
+  id: string;
+  name: string;
+  description?: string;
+  values: Record<string, string>; // doi -> value
+  loading: boolean;
+}
+
 const ComparisonPage: React.FC = () => {
   const navigate = useNavigate();
   const { comparisonDois, projects, showToast } = useAppStore();
@@ -21,6 +29,12 @@ const ComparisonPage: React.FC = () => {
 
   // Project selection for server-side data
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+
+  // Custom metric columns (GAP-004)
+  const [customMetrics, setCustomMetrics] = useState<CustomMetric[]>([]);
+  const [showCustomMetricInput, setShowCustomMetricInput] = useState(false);
+  const [newMetricName, setNewMetricName] = useState('');
+  const [newMetricDesc, setNewMetricDesc] = useState('');
 
   // Export dropdown
   const [exportOpen, setExportOpen] = useState(false);
@@ -124,6 +138,81 @@ const ComparisonPage: React.FC = () => {
       .map((r) => parseFloat(String(r[field])))
       .filter((v) => !isNaN(v));
     return values.length > 0 ? Math.max(...values) : null;
+  };
+
+  // Custom metric functions (GAP-004)
+  const addCustomMetric = async () => {
+    if (!newMetricName.trim()) {
+      showToast('指标名称不能为空', 'error');
+      return;
+    }
+
+    const metricId = `custom_${Date.now()}`;
+    const newMetric: CustomMetric = {
+      id: metricId,
+      name: newMetricName.trim(),
+      description: newMetricDesc.trim() || undefined,
+      values: {},
+      loading: true,
+    };
+
+    setCustomMetrics((prev) => [...prev, newMetric]);
+    setShowCustomMetricInput(false);
+    setNewMetricName('');
+    setNewMetricDesc('');
+
+    // Request AI to extract custom metric for each paper
+    const dois = compData?.rows?.map((r) => String(r['DOI'])).filter(Boolean) || [];
+    const newValues: Record<string, string> = {};
+
+    try {
+      // Call backend API to extract custom metric using AI
+      for (const doi of dois) {
+        try {
+          const resp = await fetch(`${import.meta.env.VITE_API_BASE || 'http://localhost:8000'}/api/qa/${encodeURIComponent(doi)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              question: `What is the ${newMetric.name}? ${newMetric.description || ''}`.trim(),
+            }),
+          });
+          const data = await resp.json();
+          if (data.success && data.answer) {
+            newValues[doi] = data.answer;
+          } else {
+            newValues[doi] = 'N/A';
+          }
+        } catch {
+          newValues[doi] = 'N/A';
+        }
+      }
+
+      setCustomMetrics((prev) =>
+        prev.map((m) =>
+          m.id === metricId
+            ? { ...m, values: newValues, loading: false }
+            : m
+        )
+      );
+    } catch (err) {
+      showToast('自定义指标提取失败', 'error');
+      setCustomMetrics((prev) =>
+        prev.map((m) =>
+          m.id === metricId
+            ? { ...m, loading: false }
+            : m
+        )
+      );
+    }
+  };
+
+  const removeCustomMetric = (metricId: string) => {
+    setCustomMetrics((prev) => prev.filter((m) => m.id !== metricId));
+  };
+
+  const getCustomMetricValue = (doi: string, metricId: string): string => {
+    const metric = customMetrics.find((m) => m.id === metricId);
+    return metric?.values[doi] || '—';
   };
 
   if (loading) {
@@ -237,8 +326,72 @@ const ComparisonPage: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* Custom metric button (GAP-004) */}
+          <button
+            type="button"
+            onClick={() => setShowCustomMetricInput(true)}
+            className="px-4 py-2 rounded-xl border border-brand-500/30 bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 transition-all text-xs font-bold"
+          >
+            + 自定义指标
+          </button>
         </div>
       </header>
+
+      {/* Custom metric input modal (GAP-004) */}
+      {showCustomMetricInput && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowCustomMetricInput(false)} />
+          <div className="relative glass-card w-full max-w-md rounded-3xl p-6 border-white/10 shadow-2xl">
+            <h3 className="text-lg font-bold text-white mb-4">添加自定义指标列</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              输入需要 AI 提取的自定义指标，系统将自动从文献中提取该指标值
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  指标名称 <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newMetricName}
+                  onChange={(e) => setNewMetricName(e.target.value)}
+                  placeholder="如：退化率、T80寿命、带隙..."
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-brand-500/50"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  描述说明 <span className="text-slate-600">(可选)</span>
+                </label>
+                <textarea
+                  value={newMetricDesc}
+                  onChange={(e) => setNewMetricDesc(e.target.value)}
+                  placeholder="帮助 AI 更准确地理解要提取的指标..."
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-brand-500/50 min-h-[60px] resize-none"
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => setShowCustomMetricInput(false)}
+                className="flex-1 py-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 font-bold text-sm hover:bg-white/10 transition-all"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={addCustomMetric}
+                disabled={!newMetricName.trim()}
+                className="flex-1 py-2.5 rounded-xl btn-primary font-bold text-sm disabled:opacity-50"
+              >
+                添加指标
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Condition filter bar */}
       {filtersOpen && selectedProjectId && (
@@ -327,33 +480,56 @@ const ComparisonPage: React.FC = () => {
                   {col}
                 </th>
               ))}
+              {/* Custom metric columns (GAP-004) */}
+              {customMetrics.map((metric) => (
+                <th
+                  key={metric.id}
+                  className="p-4 text-[10px] font-bold text-brand-400 uppercase tracking-widest min-w-[120px] border-r border-white/5 last:border-r-0"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate">{metric.name}</span>
+                    {metric.loading && (
+                      <div className="w-3 h-3 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin shrink-0" />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeCustomMetric(metric.id)}
+                      className="text-slate-600 hover:text-red-400 transition-colors shrink-0"
+                      title="删除此列"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, rowIdx) => (
-              <tr key={rowIdx} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                {columns.map((col, colIdx) => {
-                  const val = String(row[col] || '');
-                  const doi = String(row['DOI'] || '');
-                  const warning = getCellWarning(doi, col);
+            {rows.map((row, rowIdx) => {
+              const doi = String(row['DOI'] || '');
+              return (
+                <tr key={rowIdx} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                  {columns.map((col, colIdx) => {
+                    const val = String(row[col] || '');
+                    const warning = getCellWarning(doi, col);
 
-                  // Determine cell styling
-                  const numVal = parseFloat(val);
-                  const isNumeric = !isNaN(numVal) && val.trim() !== '';
-                  const colMax = isNumeric ? getColumnMax(col) : null;
-                  const isMax = colMax !== null && numVal === colMax;
-                  const isMissing = val === '' || val === 'N/A' || val === 'undefined';
+                    // Determine cell styling
+                    const numVal = parseFloat(val);
+                    const isNumeric = !isNaN(numVal) && val.trim() !== '';
+                    const colMax = isNumeric ? getColumnMax(col) : null;
+                    const isMax = colMax !== null && numVal === colMax;
+                    const isMissing = val === '' || val === 'N/A' || val === 'undefined';
 
-                  let cellBg = '';
-                  if (isMissing) {
-                    cellBg = 'bg-slate-500/5';
-                  } else if (warning) {
-                    cellBg = 'bg-orange-500/5';
-                  } else if (isMax) {
-                    cellBg = 'bg-emerald-500/5';
-                  }
+                    let cellBg = '';
+                    if (isMissing) {
+                      cellBg = 'bg-slate-500/5';
+                    } else if (warning) {
+                      cellBg = 'bg-orange-500/5';
+                    } else if (isMax) {
+                      cellBg = 'bg-emerald-500/5';
+                    }
 
-                  return (
+                    return (
                     <td
                       key={colIdx}
                       className={`p-4 text-sm border-r border-white/5 last:border-r-0 ${cellBg} ${
@@ -386,6 +562,28 @@ const ComparisonPage: React.FC = () => {
                           </span>
                         )}
                       </div>
+                    </td>
+                  );
+                })}
+                {/* Custom metric cells (GAP-004) */}
+                {customMetrics.map((metric) => {
+                  const metricVal = getCustomMetricValue(doi, metric.id);
+                  const isMissing = metricVal === '—' || metricVal === 'N/A';
+                  return (
+                    <td
+                      key={metric.id}
+                      className={`p-4 text-sm border-r border-white/5 last:border-r-0 ${
+                        isMissing ? 'bg-slate-500/5 text-slate-600' : 'text-brand-300'
+                      }`}
+                    >
+                      {metric.loading ? (
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin" />
+                          <span className="text-slate-500 text-xs">提取中...</span>
+                        </div>
+                      ) : (
+                        <span className="truncate">{isMissing ? '—' : metricVal}</span>
+                      )}
                     </td>
                   );
                 })}
