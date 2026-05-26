@@ -138,6 +138,47 @@ async def save_ai_engine(config: AIEngineConfig):
     return {"success": True, "data": {"message": "AI engine configured"}}
 
 
+@router.post("/test-connectivity")
+async def test_connectivity(config: AIEngineConfig):
+    """Test AI model connectivity through backend proxy."""
+    import httpx
+
+    test_url = config.baseUrl.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {config.apiKey}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(test_url, headers=headers)
+            if resp.status_code == 401:
+                raise HTTPException(
+                    status_code=401,
+                    detail="API Key 验证失败，请检查 Key 是否正确",
+                )
+            if resp.status_code >= 400:
+                raise HTTPException(
+                    status_code=resp.status_code,
+                    detail=f"连接失败: {resp.reason_phrase} ({resp.status_code})",
+                )
+            return {"success": True, "data": {"message": "Connected successfully"}}
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无法连接到 {config.baseUrl}，请检查 Base URL",
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=408,
+            detail=f"连接 {config.baseUrl} 超时，请检查网络或代理设置",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"测试失败: {str(e)}",
+        )
+
+
 @router.post("/proxy")
 async def save_proxy(config: ProxyConfig):
     """Save proxy configuration."""

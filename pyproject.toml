@@ -1,0 +1,11 @@
+[tool.pytest.ini_options]
+testpaths = ["src-python"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "unit: fast unit tests (no DB, no network)",
+    "integration: tests requiring SQLite",
+    "sse: tests requiring SSE streaming",
+    "security: security-related tests",
+]

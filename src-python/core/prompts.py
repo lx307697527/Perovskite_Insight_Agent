@@ -124,6 +124,93 @@ You are an expert in experimental materials science. Your task is to extract the
 {content}
 """
 
+STAGE2_DEEP_PROMPT = """
+You are an expert in Perovskite materials research. Your task is to perform a DEEP extraction of experimental data from the provided paper content (Markdown format).
+
+This is a Stage2 deep extraction — go beyond surface-level parameters and extract ALL quantitative data with full traceability.
+
+### Step 1: Identify Device Type
+- **Solar Cell (PV)**: Photovoltaic devices
+- **X-ray Detector**: Radiation detection
+- **Photodetector**: Light detection
+- **LED**: Light-emitting devices
+- **Other**: Specify
+
+### Step 2: Extract ALL Device Parameters
+
+#### For Solar Cells:
+- PCE (champion and certified), Voc, Jsc, FF — with exact units and test conditions
+- Scan direction (R-scan/F-scan/bi-directional)
+- Steady-State Power Output (SPO): yes/no
+- Active area, fill factor calculation method
+
+#### For X-ray Detectors:
+- Sensitivity, LoD, Dark Current, Response Time, MTF
+
+#### For Photodetectors:
+- Responsivity, Detectivity (D*), Response Time, EQE
+
+#### For LEDs:
+- EQE, Luminance, Peak Wavelength, Current Efficiency
+
+### Step 3: Material Composition
+- Exact stoichiometry (e.g., Cs0.05FA0.85MA0.1Pb(I0.85Br0.15)3)
+- Cation ratios, anion mixing ratios
+- ETL/HTL materials
+
+### Step 4: Fabrication Process
+- Precursor details (chemicals, concentrations, solvents, ratios)
+- Deposition method and parameters (speed, time, temperature)
+- Annealing conditions (temp, duration, atmosphere)
+- Environmental conditions (humidity, glovebox specs)
+
+### Step 5: Stability
+- T80/T90 lifetime values
+- ISOS protocol level (ISOS-D-1, ISOS-L-1, etc.)
+- Test conditions (light, temperature, humidity)
+
+### Output Format (Strict JSON):
+{
+  "device_type": "solar_cell | xray_detector | photodetector | led | other",
+  "composition": "string",
+  "structure": "string",
+  "etl": "string or null",
+  "htl": "string or null",
+  "metrics": [
+    {
+      "field": "Metric name",
+      "value": 25.1,
+      "unit": "%",
+      "condition": "test conditions",
+      "scan_direction": "R-scan | F-scan | R-scan+F-scan",
+      "has_spo": false,
+      "evidence": {
+        "text": "exact quote from paper",
+        "page": 5,
+        "tableId": "Table 1 or null"
+      }
+    }
+  ],
+  "process": [
+    {
+      "field": "Parameter name",
+      "value": "value with unit",
+      "source": "main | si",
+      "evidence": "quote from paper"
+    }
+  ],
+  "stability": {
+    "t80": ">1000 hours",
+    "protocol": "ISOS-L-1",
+    "test_conditions": "ambient, dark"
+  },
+  "process_summary": "One sentence fabrication summary."
+}
+
+### Paper Content:
+{content}
+"""
+
 QA_PRECISION_PROMPT = """You are a precise scientific literature Q&A assistant. Answer the user's question based ONLY on the provided context from a research paper.
 
 ### Rules:
@@ -150,7 +237,7 @@ QA_SUGGESTIONS_PROMPT = """Based on the following paper metadata, generate 3-5 s
 ### Paper Information:
 {context}
 
-Generate exactly 3-5 questions, one per line, numbered:"""
+Generate exactly 3-5 questions, one per line, numbered:
 
 ### Paper Content:
 {content}

@@ -45,6 +45,14 @@ export async function saveAIEngine(payload: AIEnginePayload): Promise<{ message:
   });
 }
 
+export async function testConnectivity(payload: AIEnginePayload): Promise<{ message: string }> {
+  return fetchJSON<{ message: string }>(`${API_BASE}/api/config/test-connectivity`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function saveProxy(payload: ProxyPayload): Promise<{ message: string }> {
   return fetchJSON<{ message: string }>(`${API_BASE}/api/config/proxy`, {
     method: 'POST',

@@ -72,35 +72,18 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
     setTestError(null);
 
     try {
-      // Test API connectivity
-      const resp = await fetch(`${config.baseUrl.rstrip ? config.baseUrl.rstrip('/') : config.baseUrl.replace(/\/+$/, '')}/models`, {
-        headers: { Authorization: `Bearer ${config.apiKey}` },
-        signal: AbortSignal.timeout(15000),
+      // Test API connectivity via backend proxy to avoid CORS
+      await configApi.testConnectivity({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model,
       });
-
-      if (resp.status === 401) {
-        setTestError('API Key 验证失败，请检查 Key 是否正确');
-        setTestStatus('error');
-        return;
-      }
-
-      if (!resp.ok && resp.status !== 200) {
-        setTestError(`连接失败: ${resp.statusText}`);
-        setTestStatus('error');
-        return;
-      }
 
       setTestStatus('success');
       setTimeout(() => setTestStatus('idle'), 3000);
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : '连接失败';
-      if (errorMsg.includes('abort') || errorMsg.includes('timeout')) {
-        setTestError('连接超时，请检查网络或代理设置');
-      } else if (errorMsg.includes('fetch')) {
-        setTestError(`无法连接到 ${config.baseUrl}，请检查 Base URL`);
-      } else {
-        setTestError(errorMsg);
-      }
+      setTestError(errorMsg);
       setTestStatus('error');
     }
   };
