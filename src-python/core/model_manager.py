@@ -61,7 +61,25 @@ def _load_model():
         # Check if model is cached locally
         if os.path.exists(_MODEL_DIR) and os.listdir(_MODEL_DIR):
             logger.info(f"Loading embedding model from cache: {_MODEL_DIR}")
-            _model = SentenceTransformer(_MODEL_DIR)
+            try:
+                _model = SentenceTransformer(_MODEL_DIR)
+            except Exception as cache_err:
+                logger.warning(
+                    f"Failed to load embedding model from local cache ({cache_err}). "
+                    "Clearing broken cache and re-downloading from remote..."
+                )
+                import shutil
+                try:
+                    if os.path.exists(_MODEL_DIR):
+                        shutil.rmtree(_MODEL_DIR)
+                    os.makedirs(_MODEL_DIR, exist_ok=True)
+                except Exception as clean_err:
+                    logger.error(f"Failed to clean broken cache directory: {clean_err}")
+                
+                logger.info(f"Downloading embedding model: {model_name}")
+                _model = SentenceTransformer(model_name)
+                # Cache for future use
+                _model.save(_MODEL_DIR)
         else:
             logger.info(f"Downloading embedding model: {model_name}")
             _model = SentenceTransformer(model_name)

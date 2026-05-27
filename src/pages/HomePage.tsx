@@ -11,7 +11,7 @@ import type { Literature, Project } from '../types';
 
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
-  const { setSearchResults, setSelectedDoi, showToast } = useAppStore();
+  const { setSearchResults, setSelectedDoi, showToast, backendConnected } = useAppStore();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -25,9 +25,9 @@ const HomePage: React.FC = () => {
 
   useEffect(() => {
     isMounted.current = true;
-    loadData();
+    if (backendConnected) loadData();
     return () => { isMounted.current = false; };
-  }, []);
+  }, [backendConnected]);
 
   const loadData = async () => {
     try {
@@ -152,15 +152,31 @@ const HomePage: React.FC = () => {
           </p>
         </div>
 
-        <UnifiedInputBox
-          onSubmit={handleInputSubmit}
-          onFileUpload={handleFileUpload}
-          loading={loading}
-          placeholder="粘贴 DOI (10.xxx/xxx)、上传 PDF 或输入研究方向..."
-        />
+        {!backendConnected ? (
+          <div className="w-full max-w-5xl py-12 text-center">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 mb-4">
+              <span className="text-3xl">⚠️</span>
+            </div>
+            <h2 className="text-lg font-bold text-amber-400 mb-2">后端服务未连接</h2>
+            <p className="text-sm text-slate-500 mb-4 max-w-md mx-auto">
+              请先启动 Python Sidecar 服务（默认端口 8000），然后刷新页面。
+            </p>
+            <code className="text-xs text-slate-600 bg-white/5 px-3 py-1.5 rounded-lg block mb-4 max-w-xs mx-auto">
+              cd src-python && python main.py
+            </code>
+          </div>
+        ) : (
+          <UnifiedInputBox
+            onSubmit={handleInputSubmit}
+            onFileUpload={handleFileUpload}
+            loading={loading}
+            placeholder="粘贴 DOI (10.xxx/xxx)、上传 PDF 或输入研究方向..."
+          />
+        )}
       </div>
 
       {/* Section 2: Temp Inbox */}
+      {backendConnected && (
       <div className="w-full max-w-5xl px-8 mb-8">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em] flex items-center gap-2">
@@ -255,8 +271,10 @@ const HomePage: React.FC = () => {
           </div>
         )}
       </div>
+      )}
 
       {/* Section 3: Project Cards */}
+      {backendConnected && (
       <div className="w-full max-w-5xl px-8 pb-24">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-[0.2em] flex items-center gap-2">
@@ -312,6 +330,7 @@ const HomePage: React.FC = () => {
           </div>
         )}
       </div>
+      )}
 
       {/* Floating Action Bar */}
       <div className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-slate-900/80 backdrop-blur-2xl px-6 py-3 rounded-2xl border border-white/10 shadow-2xl flex items-center gap-6 z-50">

@@ -46,6 +46,10 @@ interface AppState {
   chatContextDois: string[];
   setChatContextDois: (dois: string[]) => void;
 
+  // Backend connectivity
+  backendConnected: boolean;
+  setBackendConnected: (v: boolean) => void;
+
   // Toast
   toast: { message: string; type: 'info' | 'error' | 'success' } | null;
   showToast: (message: string, type?: 'info' | 'error' | 'success') => void;
@@ -96,6 +100,9 @@ export const useAppStore = create<AppState>((set) => ({
   setActiveChatSessionId: (id) => set({ activeChatSessionId: id }),
   chatContextDois: [],
   setChatContextDois: (dois) => set({ chatContextDois: dois }),
+
+  backendConnected: true,
+  setBackendConnected: (v) => set({ backendConnected: v }),
 
   toast: null,
   showToast: (message, type = 'info') => {

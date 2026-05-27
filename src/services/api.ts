@@ -1,7 +1,7 @@
 import type { ApiResponse, SearchResponse, PaperDetailsResponse, Settings, SSEEvent, Paper } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-const DEFAULT_TIMEOUT = 30000; // 30 seconds
+const DEFAULT_TIMEOUT = 10000; // 10 seconds
 
 /**
  * Helper function to create a fetch request with timeout
@@ -153,10 +153,11 @@ export function createLocalExtractionConnection(path: string): EventSource {
 }
 
 /**
- * Create SSE connection for uploaded file extraction status
+ * Create SSE connection for uploaded file extraction status.
+ * Uses the V1 proxy which resolves upload_ DOIs to local PDF paths.
  */
 export function createUploadExtractionConnection(uploadId: string): EventSource {
-  return new EventSource(`${API_BASE}/api/extract_upload/status/${uploadId}`);
+  return new EventSource(`${API_BASE}/api/extract/${encodeURIComponent(uploadId)}`);
 }
 
 /**
@@ -167,7 +168,7 @@ export async function uploadPdfForExtraction(file: File): Promise<{ doi: string 
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetchWithTimeout(`${API_BASE}/api/extract_upload`, {
+  const response = await fetchWithTimeout(`${API_BASE}/api/extract/upload`, {
     method: 'POST',
     body: formData
   }, 60000); // 60 second timeout for upload

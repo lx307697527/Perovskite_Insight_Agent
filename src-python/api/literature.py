@@ -296,8 +296,35 @@ async def v1_get_paper_details(doi: str):
     if doi.startswith("upload_"):
         from core.upload_manager import upload_manager
         result_data = upload_manager.get_result(doi)
+
         if not result_data:
-            raise HTTPException(status_code=404, detail="Upload result not found or extraction incomplete")
+            # Fallback: check DB for literature-uploaded PDFs (not registered with upload_manager)
+            db = SessionLocal()
+            try:
+                paper = db.query(Literature).filter(Literature.doi == doi).first()
+                if not paper:
+                    raise HTTPException(status_code=404, detail="Upload result not found or extraction incomplete")
+
+                return {
+                    "success": True,
+                    "data": {
+                        "title": paper.title or "Uploaded PDF",
+                        "journal": "Local File",
+                        "year": 2024,
+                        "authors": "Uploaded by user",
+                        "abstract": paper.abstract or "No abstract available for uploaded files.",
+                        "metrics": [],
+                        "process": [],
+                        "is_extracted": False,
+                        "device_type": "unknown",
+                        "composition": "Unknown",
+                        "structure": "Unknown",
+                        "doi": doi,
+                        "local_pdf_path": paper.local_pdf_path,
+                    }
+                }
+            finally:
+                db.close()
 
         metrics = result_data.get("metrics", [])
         process = result_data.get("process", [])
@@ -477,13 +504,24 @@ async def v1_get_pdf(doi: str):
     from fastapi.responses import FileResponse
     from core.crawler import crawler
 
+    db = SessionLocal()
+    try:
+        # 1. Check if we have a valid local_pdf_path in DB for ANY type of doi
+        paper = db.query(Literature).filter(Literature.doi == doi).first()
+        if paper and paper.local_pdf_path and _os.path.exists(paper.local_pdf_path):
+            return FileResponse(paper.local_pdf_path, media_type="application/pdf")
+    finally:
+        db.close()
+
+    # 2. If it's an upload_ DOI but wasn't in DB, check upload_manager
     if doi.startswith("upload_"):
         from core.upload_manager import upload_manager
         file_path = upload_manager.get_file_path(doi)
-        if not file_path or not _os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="Uploaded PDF not found or has been cleaned up.")
-        return FileResponse(file_path, media_type="application/pdf")
+        if file_path and _os.path.exists(file_path):
+            return FileResponse(file_path, media_type="application/pdf")
+        raise HTTPException(status_code=404, detail="Uploaded PDF not found or has been cleaned up.")
 
+    # 3. Fallback for standard DOIs to crawler download directory
     safe_filename = doi.replace("/", "_").replace("\\", "_") + ".pdf"
     file_path = _os.path.join(crawler.download_dir, safe_filename)
 

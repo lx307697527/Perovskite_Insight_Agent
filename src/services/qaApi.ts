@@ -1,7 +1,7 @@
 import type { QASSEEvent, QuickQuestion } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-const DEFAULT_TIMEOUT = 30000;
+const DEFAULT_TIMEOUT = 10000;
 
 export async function getQASuggestions(doi: string): Promise<string[]> {
   const controller = new AbortController();

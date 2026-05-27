@@ -3,6 +3,7 @@
 import json
 import datetime
 import logging
+import os
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -13,6 +14,24 @@ from core.database import SessionLocal, Literature
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/extract", tags=["extract"])
+
+
+def _resolve_local_pdf(doi: str) -> str | None:
+    """For upload_/local_ DOIs, resolve the local PDF file path from DB or upload manager."""
+    if doi.startswith("upload_"):
+        from core.upload_manager import upload_manager
+        file_path = upload_manager.get_file_path(doi)
+        if file_path and os.path.exists(file_path):
+            return file_path
+    # Fallback: check Literature table (covers both upload_ and local_ DOIs)
+    db = SessionLocal()
+    try:
+        lit = db.query(Literature).filter(Literature.doi == doi).first()
+        if lit and lit.local_pdf_path and os.path.exists(lit.local_pdf_path):
+            return lit.local_pdf_path
+    finally:
+        db.close()
+    return None
 
 
 @router.post("/{doi:path}/stage1")
@@ -43,6 +62,7 @@ async def start_deep_extraction(doi: str):
 
     Stages: downloading → parsing → analyzing_si → extracting → saving
     Each event includes progress info with estimated remaining time.
+    Supports upload_/local_ DOIs by resolving to local PDF paths.
 
     SSE event format:
     - status: downloading/parsing/analyzing_si/extracting — in-progress
@@ -52,9 +72,12 @@ async def start_deep_extraction(doi: str):
     """
     from core.extractor import extractor
 
+    local_pdf = _resolve_local_pdf(doi)
+
     async def event_stream():
         try:
-            async for event in extractor.process_full_paper(doi):
+            gen = extractor.process_local_pdf(local_pdf) if local_pdf else extractor.process_full_paper(doi)
+            async for event in gen:
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.error(f"Stage2 SSE error for {doi}: {e}")
@@ -160,7 +183,7 @@ async def v1_start_extraction(doi: str):
     with POST /api/extract/{doi}/deep. The main.py V1 route is preserved
     as a thin redirect. Prefer POST /api/extract/{doi}/deep for V2.
     """
-    if not DOI_PATTERN.match(doi):
+    if not DOI_PATTERN.match(doi) and not doi.startswith(("upload_", "local_")):
         raise HTTPException(status_code=400, detail="Invalid DOI format")
 
     if doi in active_extractions:
@@ -172,9 +195,12 @@ async def v1_start_extraction(doi: str):
 
     from core.extractor import extractor as ext
 
+    local_pdf = _resolve_local_pdf(doi)
+
     async def event_generator():
         try:
-            async for step in ext.process_full_paper(doi):
+            gen = ext.process_local_pdf(local_pdf) if local_pdf else ext.process_full_paper(doi)
+            async for step in gen:
                 yield f"data: {json.dumps(step)}\n\n"
         except Exception as e:
             error_event = {

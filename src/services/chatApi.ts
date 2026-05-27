@@ -6,7 +6,7 @@
 import type { ChatSession, ChatMessage } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-const DEFAULT_TIMEOUT = 30000;
+const DEFAULT_TIMEOUT = 10000;
 
 export interface ChatSSEEvent {
   type: 'content' | 'source' | 'done' | 'error';

@@ -3,7 +3,7 @@
  */
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-const DEFAULT_TIMEOUT = 30000;
+const DEFAULT_TIMEOUT = 10000;
 
 export interface ComparisonFilters {
   scan_direction?: string;

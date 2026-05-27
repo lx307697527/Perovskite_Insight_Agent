@@ -80,14 +80,14 @@ const Row = ({ index, style, ...props }: any) => {
                   <>
                     {doc.metrics.slice(0, 4).map((metric: any, idx: number) => (
                       <div key={idx} className="flex flex-col">
-                        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">{metric.field}</span>
+                        <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">{metric.field || metric.label}</span>
                         <span className="text-sm font-bold text-emerald-400" title={metric.evidence}>
                           {metric.value}
                         </span>
                       </div>
                     ))}
                   </>
-                ) : doc.metrics && !Array.isArray(doc.metrics) ? (
+                ) : doc.metrics && !Array.isArray(doc.metrics) && Object.keys(doc.metrics).length > 0 ? (
                   <>
                     <div className="flex flex-col">
                       <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">PCE</span>
@@ -108,6 +108,8 @@ const Row = ({ index, style, ...props }: any) => {
                       </span>
                     </div>
                   </>
+                ) : doc.progress === 100 || doc.quality === 'good' ? (
+                   <span className="text-[10px] text-slate-400 font-bold bg-white/5 px-3 py-1 rounded">未能提取核心参数</span>
                 ) : (
                   <button
                     type="button"
@@ -184,7 +186,7 @@ const ResultsPage: React.FC = () => {
 
     const doc = results.find(d => d.doi === doi);
     let eventSource: EventSource;
-    if (doc?.isUploaded) {
+    if (doi.startsWith('upload_') || doi.startsWith('local_')) {
       eventSource = api.createUploadExtractionConnection(doi);
     } else if (doc?.localPath) {
       eventSource = api.createLocalExtractionConnection(doc.localPath);

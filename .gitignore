@@ -39,6 +39,9 @@ __pycache__/
 venv/
 env/
 
+# Debug
+src-python/_debug_route.py
+
 # Claude Code runtime
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks.json

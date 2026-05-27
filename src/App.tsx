@@ -1,10 +1,36 @@
-import React from 'react';
+import React, { useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useAppStore } from './store';
 
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+
+async function checkBackendHealth(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+  try {
+    const resp = await fetch(`${API_BASE}/`, { signal: controller.signal });
+    return resp.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 const App: React.FC = () => {
   const location = useLocation();
-  const { sidebarOpen, toggleSidebar, comparisonDois, toast, clearToast } = useAppStore();
+  const { sidebarOpen, toggleSidebar, comparisonDois, toast, clearToast, backendConnected, setBackendConnected } = useAppStore();
+
+  const pingBackend = useCallback(async () => {
+    const ok = await checkBackendHealth();
+    setBackendConnected(ok);
+  }, [setBackendConnected]);
+
+  useEffect(() => {
+    pingBackend();
+    const id = setInterval(pingBackend, 15000);
+    return () => clearInterval(id);
+  }, [pingBackend]);
 
   const navItems = [
     { path: '/home', label: '首页', icon: '🏠' },
@@ -58,10 +84,24 @@ const App: React.FC = () => {
         </aside>
       )}
 
+      {/* Backend Disconnected Banner */}
+      {!backendConnected && location.pathname !== '/onboarding' && (
+        <div className="fixed top-0 left-0 right-0 z-[200] bg-amber-500/90 text-black text-center py-2 text-sm font-medium backdrop-blur-sm">
+          后端服务未连接 (localhost:8000) — 请启动 Python Sidecar
+          <button
+            type="button"
+            onClick={pingBackend}
+            className="ml-3 px-2 py-0.5 bg-black/20 rounded text-xs hover:bg-black/30 transition-colors"
+          >
+            重试
+          </button>
+        </div>
+      )}
+
       {/* Main content */}
       <main className={`flex-1 transition-all duration-300 ${
         location.pathname !== '/onboarding' && sidebarOpen ? 'ml-56' : 'ml-0'
-      }`}>
+      }${!backendConnected ? ' mt-9' : ''}`}>
         <Outlet />
       </main>
 
@@ -85,8 +125,8 @@ const App: React.FC = () => {
           <div>SIA v2.1 | Sci-Insight Agent</div>
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-              Sidecar Connected
+              <span className={`w-2 h-2 rounded-full ${backendConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+              {backendConnected ? 'Sidecar Connected' : 'Sidecar Offline'}
             </span>
             <span>SQLite Local</span>
           </div>
