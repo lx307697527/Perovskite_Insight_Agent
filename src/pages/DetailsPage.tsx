@@ -1,22 +1,161 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../services/api';
+import { getLiterature } from '../services/literatureApi';
 import { getQASuggestions, createQAConnection } from '../services/qaApi';
-import type { PaperDetailsResponse, QASSEEvent } from '../types';
+import type { PaperDetailsResponse, QASSEEvent, ProcessRecipe, SIFile } from '../types';
 import PdfViewer from '../components/PdfViewer';
 import PdfFragmentOverlay from '../components/PdfFragmentOverlay';
 import QuickQuestionBox from '../components/QuickQuestionBox';
 import { useAppStore } from '../store';
+
+// ============================================================
+// Structured data types (aligned with InsightLabPage)
+// ============================================================
+
+interface ExtractedMetric {
+  label: string;
+  value: string | number;
+  unit?: string;
+  evidence?: string;
+  scan_direction?: string;
+  has_spo?: boolean;
+}
+
+interface StabilityItem {
+  metric?: string;
+  value: string;
+  protocol?: string;
+  t80?: string;
+  t90?: string;
+  retention?: string;
+  conditions?: string;
+  evidence?: string;
+}
+
+interface SIFileInfo {
+  id: string;
+  type: string;
+  status: string;
+  local_path?: string;
+}
+
+interface DetailsData {
+  title: string;
+  journal: string;
+  year: number;
+  authors: string;
+  abstract: string;
+  is_extracted: boolean;
+  extraction_stage: string;
+  quality_flag: string;
+  data_source: string;
+  metrics: ExtractedMetric[];
+  process: ProcessRecipe[];
+  stability: StabilityItem[];
+  si_files: SIFileInfo[];
+}
+
+// ============================================================
+// Parse V2 literature into structured DetailsData
+// ============================================================
+
+interface V2Literature {
+  doi: string;
+  title: string;
+  journal?: string;
+  year?: number;
+  authors?: string;
+  abstract?: string;
+  is_extracted: boolean;
+  extraction_stage: string;
+  data_source: string;
+  quality_flag?: string;
+  local_pdf_path?: string;
+  performance_data?: any;   // parsed JSON (API returns parsed)
+  process_params?: any;     // parsed JSON
+  stability_data?: any;     // parsed JSON
+  source_mapping?: any;     // parsed JSON
+  si_files?: SIFileInfo[];
+}
+
+function parseV2ToDetails(lit: V2Literature): DetailsData {
+  const perf = lit.performance_data || null;
+  const proc = lit.process_params || null;
+
+  // Performance: support both flat { pce, voc, ... } and nested { metrics: [...] }
+  const perfMetrics: ExtractedMetric[] = Array.isArray(perf?.metrics)
+    ? perf.metrics.map((m: any) => ({
+        label: m.field || m.label || 'Unknown',
+        value: m.value ?? 'N/A',
+        unit: m.unit ?? '',
+        evidence: m.evidence,
+        scan_direction: m.scan_direction,
+        has_spo: m.has_spo,
+      }))
+    : perf
+      ? Object.entries(perf)
+          .filter(([k]) => ['pce', 'voc', 'jsc', 'ff'].includes(k.toLowerCase()))
+          .map(([label, data]: [string, any]) => ({
+            label: label.toUpperCase(),
+            value: data?.value ?? data ?? 'N/A',
+            unit: data?.unit ?? (label.toLowerCase() === 'pce' || label.toLowerCase() === 'ff' ? '%' : label.toLowerCase() === 'voc' ? 'V' : 'mA/cm²'),
+            evidence: data?.evidence,
+            scan_direction: data?.scan_direction,
+            has_spo: data?.has_spo,
+          }))
+      : [];
+
+  // Process: support both array and { steps: [...] } object
+  const procSteps: ProcessRecipe[] = Array.isArray(proc)
+    ? proc
+    : proc?.steps || [];
+
+  // Stability: prefer dedicated column, fallback to nested in performance_data
+  const rawStability = lit.stability_data || perf?.stability || null;
+  const stability: StabilityItem[] = rawStability
+    ? (Array.isArray(rawStability) ? rawStability : [rawStability]).map((s: any) => ({
+        metric: s.metric || s.protocol || '',
+        value: s.value || s.t80 || s.t90 || s.retention || '',
+        protocol: s.protocol,
+        t80: s.t80,
+        t90: s.t90,
+        retention: s.retention,
+        conditions: s.conditions,
+        evidence: s.evidence,
+      }))
+    : [];
+
+  return {
+    title: lit.title,
+    journal: lit.journal || 'Unknown',
+    year: lit.year || 2024,
+    authors: lit.authors || 'Unknown',
+    abstract: lit.abstract || 'No abstract available.',
+    is_extracted: lit.is_extracted,
+    extraction_stage: lit.extraction_stage,
+    quality_flag: lit.quality_flag || 'OK',
+    data_source: lit.data_source || 'abstract',
+    metrics: perfMetrics,
+    process: procSteps,
+    stability,
+    si_files: lit.si_files || [],
+  };
+}
+
+// ============================================================
+// Component
+// ============================================================
 
 const DetailsPage: React.FC = () => {
   const { doi } = useParams<{ doi: string }>();
   const navigate = useNavigate();
   const { comparisonDois, toggleComparisonDoi } = useAppStore();
 
-  const [activeTab, setActiveTab] = useState<'device' | 'process' | 'si'>('device');
+  const [activeTab, setActiveTab] = useState<'device' | 'process' | 'si' | 'stability'>('device');
   const [highlightedText, setHighlightedText] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [paperData, setPaperData] = useState<PaperDetailsResponse | null>(null);
+  const [paperData, setPaperData] = useState<DetailsData | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [viewMode, setViewMode] = useState<'abstract' | 'pdf'>('abstract');
@@ -56,14 +195,50 @@ const DetailsPage: React.FC = () => {
     };
   }, []);
 
+  // ============================================================
+  // Fetch details — V2 with V1 fallback
+  // ============================================================
+
   const fetchDetails = async () => {
     if (!currentDoi) return;
     setLoading(true);
     try {
-      const data = await api.fetchPaperDetails(currentDoi);
-      if (isMounted.current) setPaperData(data);
-    } catch (err) {
-      if (isMounted.current) showToast('获取论文详情失败', 'error');
+      // Try V2 API first (richer data: SI files, quality, stability, scan_direction)
+      const lit = await getLiterature(currentDoi);
+      if (isMounted.current) {
+        setPaperData(parseV2ToDetails(lit as unknown as V2Literature));
+      }
+    } catch {
+      // V2 fallback: paper not in DB yet → use V1 API (crawler-based)
+      try {
+        const v1Data = await api.fetchPaperDetails(currentDoi);
+        if (isMounted.current) {
+          // Convert V1 format to DetailsData
+          const details: DetailsData = {
+            title: v1Data.title,
+            journal: v1Data.journal,
+            year: v1Data.year,
+            authors: v1Data.authors,
+            abstract: v1Data.abstract,
+            is_extracted: v1Data.is_extracted,
+            extraction_stage: v1Data.is_extracted ? 'stage2' : 'none',
+            quality_flag: 'OK',
+            data_source: 'abstract',
+            metrics: (v1Data.metrics || []).map((m: any) => ({
+              label: m.label || m.field || 'Unknown',
+              value: m.value ?? 'N/A',
+              unit: m.unit ?? '',
+              evidence: m.evidence,
+            })),
+            process: v1Data.process || [],
+            stability: [],
+            si_files: [],
+          };
+          setPaperData(details);
+        }
+      } catch {
+        if (isMounted.current) showToast('获取论文详情失败', 'error');
+      }
     } finally {
       if (isMounted.current) setLoading(false);
     }
@@ -82,9 +257,7 @@ const DetailsPage: React.FC = () => {
       try {
         const result = await getQASuggestions(currentDoi);
         if (isMounted.current) setSuggestions(result);
-      } catch (err) {
-        console.error('Failed to fetch suggestions:', err);
-        // Use fallback suggestions on error
+      } catch {
         if (isMounted.current) {
           setSuggestions([
             '这篇论文的主要贡献是什么？',
@@ -104,12 +277,10 @@ const DetailsPage: React.FC = () => {
   const handleAskQuestion = useCallback((question: string) => {
     if (!currentDoi || isQaLoading) return;
 
-    // Reset state
     setQaAnswer('');
     setQaSources([]);
     setIsQaLoading(true);
 
-    // Clean up previous connection
     if (qaCleanupRef.current) {
       qaCleanupRef.current();
     }
@@ -189,8 +360,6 @@ const DetailsPage: React.FC = () => {
     };
     eventSource.onerror = () => {
       if (!isMounted.current) return;
-      // EventSource fires onerror when the stream closes normally after 'completed'.
-      // Only treat it as a real error if the connection is still supposed to be open.
       if (eventSource.readyState === EventSource.CLOSED) return;
       handleExtractionError(eventSource, retryCount);
     };
@@ -207,6 +376,25 @@ const DetailsPage: React.FC = () => {
       showToast('解析失败，请检查网络或 API Key 配置', 'error');
     }
   };
+
+  // ============================================================
+  // Quality warning helpers (Task 8)
+  // ============================================================
+
+  const getMetricWarnings = (metric: ExtractedMetric): string[] => {
+    const warnings: string[] = [];
+    if (!metric.scan_direction) {
+      warnings.push('缺少扫描方向标注');
+    }
+    if (metric.label.toUpperCase() === 'PCE' && !metric.has_spo) {
+      warnings.push('未报告稳态功率输出 (SPO)');
+    }
+    return warnings;
+  };
+
+  // ============================================================
+  // Render helpers
+  // ============================================================
 
   if (loading) {
     return (
@@ -228,6 +416,22 @@ const DetailsPage: React.FC = () => {
 
   const isCompared = comparisonDois.includes(currentDoi);
 
+  // Determine quality warnings banner text
+  const qualityWarnings: string[] = [];
+  if (paperData.is_extracted) {
+    const hasRSOnly = paperData.metrics.some(m => m.scan_direction === 'R-scan');
+    const hasNoFS = !paperData.metrics.some(m => m.scan_direction === 'F-scan');
+    if (hasRSOnly && hasNoFS) {
+      qualityWarnings.push('仅有 R-scan 数据，无 F-scan 对照，效率值可能偏高');
+    }
+    const pceMetric = paperData.metrics.find(m => m.label.toUpperCase() === 'PCE');
+    if (pceMetric && !pceMetric.has_spo) {
+      qualityWarnings.push('未报告稳态功率输出 (SPO)，效率可靠性待确认');
+    }
+  }
+
+  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+
   return (
     <div className="h-screen flex flex-col bg-slate-950 animate-fade-in">
       <header className="h-16 border-b border-white/5 bg-black/40 backdrop-blur-md flex justify-between items-center px-6 z-50">
@@ -241,6 +445,16 @@ const DetailsPage: React.FC = () => {
           </h2>
         </div>
         <div className="flex items-center gap-3">
+          {/* Data source badge (Task 5 style) */}
+          {paperData.is_extracted && (
+            <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold ${
+              paperData.data_source === 'fulltext'
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                : 'bg-slate-500/10 text-slate-400 border border-slate-500/20'
+            }`}>
+              {paperData.data_source === 'fulltext' ? '📄 全文' : '📋 摘要'}
+            </span>
+          )}
           <button
             type="button"
             onClick={() => toggleComparisonDoi(currentDoi)}
@@ -319,6 +533,9 @@ const DetailsPage: React.FC = () => {
           )}
         </div>
 
+        {/* ============================================================ */}
+        {/* Right sidebar */}
+        {/* ============================================================ */}
         <div className="w-[450px] flex-shrink-0 flex flex-col bg-black/40 border-l border-white/5 backdrop-blur-md">
           {!paperData.is_extracted ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-8">
@@ -330,11 +547,13 @@ const DetailsPage: React.FC = () => {
             </div>
           ) : (
             <>
+              {/* Tabs — now 4 tabs */}
               <div className="flex border-b border-white/5 bg-white/5">
                 {[
                   { id: 'device', label: '核心性能' },
                   { id: 'process', label: '工艺参数' },
                   { id: 'si', label: 'SI 数据' },
+                  { id: 'stability', label: '稳定性' },
                 ].map(tab => (
                   <button type="button" key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`flex-grow py-5 text-[10px] font-bold uppercase tracking-widest transition-all ${activeTab === tab.id ? 'text-brand-400 border-b-2 border-brand-500 bg-brand-500/10' : 'text-slate-500 hover:text-slate-300'}`}>
                     {tab.label}
@@ -342,44 +561,100 @@ const DetailsPage: React.FC = () => {
                 ))}
               </div>
 
-              <div className="flex-grow overflow-y-auto p-8 space-y-8 scrollbar-hide">
-                {activeTab === 'device' ? (
-                  <div className="grid grid-cols-2 gap-4">
-                    {paperData.metrics.map((m: any, i: number) => (
-                      <div key={i} onClick={() => { setHighlightedText(m.evidence); setViewMode('pdf'); }} className={`p-5 rounded-2xl border transition-all cursor-pointer group ${highlightedText === m.evidence ? 'bg-brand-500/10 border-brand-500/40 ring-1 ring-brand-500/30 shadow-lg' : 'bg-white/5 border-white/5 hover:border-white/20'}`}>
-                        <div className="flex justify-between items-start mb-2">
-                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{m.label}</span>
-                          <div className="flex items-center gap-1.5">
-                            {m.evidence && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setPdfOverlayHighlight(m.evidence);
-                                  setShowPdfOverlay(true);
-                                }}
-                                className="opacity-0 group-hover:opacity-100 transition-opacity text-brand-400 hover:text-brand-300 p-1 rounded hover:bg-brand-500/10"
-                                title="在 PDF 中查看证据来源"
-                              >
-                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                                </svg>
-                              </button>
-                            )}
-                            <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-brand-400">溯源 →</span>
-                          </div>
+              <div className="flex-grow overflow-y-auto p-8 space-y-6 scrollbar-hide">
+
+                {/* ==================================================== */}
+                {/* Tab: Core Performance (device) — Task 8 + 9         */}
+                {/* ==================================================== */}
+                {activeTab === 'device' && (
+                  <>
+                    {/* Quality warning banner (Task 8) */}
+                    {qualityWarnings.length > 0 && (
+                      <div className="p-4 rounded-2xl bg-orange-500/10 border border-orange-500/20">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-sm">⚠️</span>
+                          <span className="text-[10px] font-bold text-orange-400 uppercase tracking-wider">数据质量提示</span>
                         </div>
-                        <div className="flex items-baseline gap-1.5">
-                          <span className="text-2xl font-bold text-slate-100">{m.value}</span>
-                          <span className="text-xs text-slate-500">{m.unit}</span>
-                        </div>
+                        {qualityWarnings.map((w, i) => (
+                          <p key={i} className="text-xs text-orange-200/80 mb-1 last:mb-0">• {w}</p>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                ) : activeTab === 'process' ? (
+                    )}
+
+                    <div className="grid grid-cols-2 gap-4">
+                      {paperData.metrics.map((m, i) => {
+                        const metricWarnings = getMetricWarnings(m);
+                        const hasAnyCondition = m.scan_direction || m.has_spo;
+
+                        return (
+                          <div
+                            key={i}
+                            onClick={() => { setHighlightedText(m.evidence || null); setViewMode('pdf'); }}
+                            className={`p-5 rounded-2xl border transition-all cursor-pointer group relative ${
+                              highlightedText === m.evidence
+                                ? 'bg-brand-500/10 border-brand-500/40 ring-1 ring-brand-500/30 shadow-lg'
+                                : 'bg-white/5 border-white/5 hover:border-white/20'
+                            }`}
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{m.label}</span>
+                              <div className="flex items-center gap-1.5">
+                                {/* Quality indicator (Task 8) */}
+                                {hasAnyCondition ? (
+                                  <span className="text-[8px] text-emerald-500/60" title="测试条件标注完整">✓</span>
+                                ) : (
+                                  <span className="text-[8px] text-orange-400/60 cursor-help" title="缺少测试条件标注">⚠</span>
+                                )}
+                                {m.evidence && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setPdfOverlayHighlight(m.evidence || null);
+                                      setShowPdfOverlay(true);
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity text-brand-400 hover:text-brand-300 p-1 rounded hover:bg-brand-500/10"
+                                    title="在 PDF 中查看证据来源"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                                    </svg>
+                                  </button>
+                                )}
+                                <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-brand-400">溯源 →</span>
+                              </div>
+                            </div>
+                            <div className="flex items-baseline gap-1.5">
+                              <span className="text-2xl font-bold text-slate-100">{m.value}</span>
+                              <span className="text-xs text-slate-500">{m.unit}</span>
+                            </div>
+                            {/* Condition suffix badges (Task 9) */}
+                            <div className="flex items-center gap-1.5 mt-2">
+                              {m.scan_direction && (
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-brand-500/20 text-brand-400 font-bold">
+                                  {m.scan_direction}
+                                </span>
+                              )}
+                              {m.has_spo && (
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">
+                                  SPO ✅
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+
+                {/* ==================================================== */}
+                {/* Tab: Process Parameters                              */}
+                {/* ==================================================== */}
+                {activeTab === 'process' && (
                   <div className="space-y-4">
-                    {paperData.process.map((item: any, idx: number) => (
+                    {paperData.process.map((item, idx) => (
                       <div key={idx} className="flex justify-between items-center p-4 rounded-2xl bg-white/5 border border-white/5 hover:border-white/20 transition-all group">
                         <span className="text-xs text-slate-400 group-hover:text-slate-300">{item.field}</span>
                         <div className="flex items-center gap-3">
@@ -390,7 +665,7 @@ const DetailsPage: React.FC = () => {
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setPdfOverlayHighlight(item.evidence);
+                                setPdfOverlayHighlight(item.evidence || null);
                                 setShowPdfOverlay(true);
                               }}
                               className="text-slate-600 hover:text-brand-400 transition-colors p-1 rounded hover:bg-brand-500/10"
@@ -406,24 +681,173 @@ const DetailsPage: React.FC = () => {
                       </div>
                     ))}
                   </div>
-                ) : (
-                  /* SI Data Tab */
-                  <div className="space-y-4">
-                    {paperData.process.filter((item: any) => item.source === 'si').length > 0 ? (
-                      paperData.process.filter((item: any) => item.source === 'si').map((item: any, idx: number) => (
-                        <div key={idx} className="flex justify-between items-center p-4 rounded-2xl bg-white/5 border border-white/5 hover:border-white/20 transition-all">
-                          <span className="text-xs text-slate-400">{item.field}</span>
-                          <span className="text-xs font-bold text-slate-200">{item.value}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="py-12 text-center">
-                        <div className="text-2xl mb-3">📄</div>
-                        <p className="text-sm text-slate-600">未发现 SI 补充信息数据</p>
-                        <p className="text-xs text-slate-700 mt-1">深度提取会解析 SI 附件中的参数</p>
+                )}
+
+                {/* ==================================================== */}
+                {/* Tab: SI Data — Task 6 (file list + params)           */}
+                {/* ==================================================== */}
+                {activeTab === 'si' && (
+                  <>
+                    {/* SI File list (Task 6) */}
+                    {paperData.si_files.length > 0 && (
+                      <div className="space-y-3">
+                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                          <span className="w-1 h-3 bg-brand-500 rounded-full" />
+                          SI 附件文件
+                        </h4>
+                        {paperData.si_files.map((file) => (
+                          <div key={file.id} className="flex items-center justify-between p-4 rounded-2xl bg-white/5 border border-white/5 hover:border-white/20 transition-all">
+                            <div className="flex items-center gap-3">
+                              <span className="text-lg">
+                                {file.type === 'pdf' ? '📄' : file.type === 'docx' ? '📝' : '📦'}
+                              </span>
+                              <div>
+                                <span className="text-xs font-bold text-slate-200">
+                                  SI.{file.type || 'pdf'}
+                                </span>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold ${
+                                    file.status === 'ready'
+                                      ? 'bg-emerald-500/20 text-emerald-400'
+                                      : file.status === 'downloading'
+                                        ? 'bg-blue-500/20 text-blue-400'
+                                        : file.status === 'failed'
+                                          ? 'bg-red-500/20 text-red-400'
+                                          : 'bg-slate-500/20 text-slate-400'
+                                  }`}>
+                                    {file.status === 'ready' ? '已就绪' : file.status === 'downloading' ? '下载中' : file.status === 'failed' ? '下载失败' : '待处理'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {file.status === 'ready' && (
+                                <a
+                                  href={`${API_BASE}/api/si/${file.id}/download`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-3 py-1.5 rounded-lg text-[10px] font-bold bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 border border-brand-500/20 transition-all"
+                                >
+                                  下载
+                                </a>
+                              )}
+                              {file.status === 'failed' && (
+                                <span className="text-[10px] text-red-400/60">下载失败</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
-                  </div>
+
+                    {/* SI Process Parameters (existing) */}
+                    <div className="space-y-4">
+                      <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                        <span className="w-1 h-3 bg-orange-500 rounded-full" />
+                        SI 工艺参数
+                      </h4>
+                      {paperData.process.filter(item => item.source === 'si').length > 0 ? (
+                        paperData.process.filter(item => item.source === 'si').map((item, idx) => (
+                          <div key={idx} className="flex justify-between items-center p-4 rounded-2xl bg-white/5 border border-white/5 hover:border-white/20 transition-all">
+                            <span className="text-xs text-slate-400">{item.field}</span>
+                            <span className="text-xs font-bold text-slate-200">{item.value}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="py-8 text-center">
+                          <div className="text-xl mb-2">📄</div>
+                          <p className="text-xs text-slate-600">未发现 SI 补充信息数据</p>
+                          <p className="text-[10px] text-slate-700 mt-1">深度提取会解析 SI 附件中的参数</p>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {/* ==================================================== */}
+                {/* Tab: Stability (Task 7)                              */}
+                {/* ==================================================== */}
+                {activeTab === 'stability' && (
+                  <>
+                    {paperData.stability.length > 0 ? (
+                      <div className="space-y-4">
+                        <div className="glass-card rounded-2xl p-5 border-white/5">
+                          <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+                            <span className="w-1 h-3 bg-amber-500 rounded-full" />
+                            稳定性数据
+                          </h4>
+                          <div className="space-y-2">
+                            {paperData.stability.map((item, idx) => (
+                              <div key={idx} className="flex items-center justify-between bg-white/5 rounded-lg p-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm text-slate-200">{item.metric || item.protocol || '稳定性指标'}</span>
+                                  {item.protocol && (
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold">
+                                      {item.protocol}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-bold text-white">{item.value}</span>
+                                  {item.evidence && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setPdfOverlayHighlight(item.evidence || null);
+                                        setShowPdfOverlay(true);
+                                      }}
+                                      className="text-slate-600 hover:text-brand-400 transition-colors p-1 rounded hover:bg-brand-500/10"
+                                      title="在 PDF 中查看证据来源"
+                                    >
+                                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                                      </svg>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Detailed conditions */}
+                          {paperData.stability.some(s => s.conditions || s.t80 || s.t90 || s.retention) && (
+                            <div className="mt-4 pt-4 border-t border-white/5 space-y-2">
+                              <h5 className="text-[9px] font-bold text-slate-600 uppercase tracking-wider">详细条件</h5>
+                              {paperData.stability.filter(s => s.conditions || s.t80 || s.t90 || s.retention).map((item, idx) => (
+                                <div key={idx} className="flex flex-wrap gap-2 text-[10px]">
+                                  {item.t80 && (
+                                    <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300">T80: {item.t80}</span>
+                                  )}
+                                  {item.t90 && (
+                                    <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300">T90: {item.t90}</span>
+                                  )}
+                                  {item.retention && (
+                                    <span className="px-2 py-0.5 rounded bg-slate-500/10 text-slate-400">保持率: {item.retention}</span>
+                                  )}
+                                  {item.conditions && (
+                                    <span className="px-2 py-0.5 rounded bg-slate-500/10 text-slate-400">{item.conditions}</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="py-16 text-center">
+                        <div className="text-3xl mb-3">🔬</div>
+                        <p className="text-sm text-slate-500 mb-1">未检测到稳定性测试数据</p>
+                        <p className="text-xs text-slate-700 mt-1">
+                          {paperData.is_extracted
+                            ? '该文献未报告 ISOS 标准稳定性测试结果'
+                            : '提取文献后可查看稳定性数据'
+                          }
+                        </p>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 

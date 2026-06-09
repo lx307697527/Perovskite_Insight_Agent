@@ -465,8 +465,24 @@ const ComparisonPage: React.FC = () => {
         </div>
       )}
 
-      {/* Comparison table */}
-      <div className="flex-grow overflow-auto glass-card rounded-3xl border-white/5 relative">
+      {/* Legend + Comparison table */}
+      <div className="flex-grow overflow-auto flex flex-col glass-card rounded-3xl border-white/5 relative">
+        {/* Legend bar (Task 8) */}
+        <div className="flex items-center gap-4 px-4 py-2 border-b border-white/5 bg-white/[0.02]">
+          <div className="flex items-center gap-1.5 text-[9px] text-slate-500">
+            <span className="w-2 h-2 rounded-full bg-emerald-500/40" /> 🏆 最优值
+          </div>
+          <div className="flex items-center gap-1.5 text-[9px] text-slate-500">
+            <span className="w-2 h-2 rounded-full bg-orange-500/40" /> ⚠ 质量警告
+          </div>
+          <div className="flex items-center gap-1.5 text-[9px] text-slate-500">
+            <span className="w-2 h-2 rounded-full bg-red-500/40" /> 数据缺失
+          </div>
+          <div className="flex items-center gap-1.5 text-[9px] text-slate-500">
+            <span className="text-slate-600">—</span> 无数据
+          </div>
+        </div>
+        <div className="flex-grow overflow-auto">
         <table className="w-full border-collapse text-left">
           <thead className="sticky top-0 z-10">
             <tr className="bg-slate-900/80 backdrop-blur-md border-b border-white/10">
@@ -521,10 +537,12 @@ const ComparisonPage: React.FC = () => {
                     const isMissing = val === '' || val === 'N/A' || val === 'undefined';
 
                     let cellBg = '';
+                    let cellBorder = '';
                     if (isMissing) {
                       cellBg = 'bg-slate-500/5';
                     } else if (warning) {
                       cellBg = 'bg-orange-500/5';
+                      cellBorder = warning.severity === 'missing' ? 'border-l-2 border-l-red-500/40' : 'border-l-2 border-l-orange-500/30';
                     } else if (isMax) {
                       cellBg = 'bg-emerald-500/5';
                     }
@@ -532,7 +550,7 @@ const ComparisonPage: React.FC = () => {
                     return (
                     <td
                       key={colIdx}
-                      className={`p-4 text-sm border-r border-white/5 last:border-r-0 ${cellBg} ${
+                      className={`p-4 text-sm border-r border-white/5 last:border-r-0 ${cellBg} ${cellBorder} ${
                         colIdx === 0 ? 'font-bold text-slate-400 bg-slate-900/20 text-xs' : ''
                       }`}
                     >
@@ -552,14 +570,22 @@ const ComparisonPage: React.FC = () => {
                           </span>
                         )}
 
-                        {/* Quality warning icon */}
+                        {/* Quality warning popover (Task 8) */}
                         {warning && (
-                          <span
-                            className="text-orange-400 cursor-help shrink-0"
-                            title={warning.reason}
-                          >
-                            ⚠
-                          </span>
+                          <div className="group/warning relative shrink-0">
+                            <span className={`cursor-help ${warning.severity === 'missing' ? 'text-red-400' : 'text-orange-400'}`}>
+                              ⚠
+                            </span>
+                            {/* Hover popover */}
+                            <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 rounded-lg text-xs whitespace-nowrap opacity-0 group-hover/warning:opacity-100 transition-opacity pointer-events-none z-50 shadow-xl ${
+                              warning.severity === 'missing'
+                                ? 'bg-red-950/95 text-red-200 border border-red-500/30'
+                                : 'bg-orange-950/95 text-orange-200 border border-orange-500/30'
+                            }`}>
+                              <span className="font-bold">{warning.severity === 'missing' ? '数据缺失' : '质量警告'}</span>
+                              <p className="mt-0.5 text-[10px] opacity-80">{warning.reason}</p>
+                            </div>
+                          </div>
                         )}
                       </div>
                     </td>
@@ -592,6 +618,7 @@ const ComparisonPage: React.FC = () => {
           })}
         </tbody>
         </table>
+        </div>
       </div>
     </div>
   );

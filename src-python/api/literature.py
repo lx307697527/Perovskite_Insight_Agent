@@ -470,6 +470,32 @@ async def v1_translate_abstract(request: dict):
     return {"success": True, "data": translated}
 
 
+@router.get("/si/{file_id}/download")
+async def download_si_file(file_id: str):
+    """Download a Supplementary Information file by its ID."""
+    from fastapi.responses import FileResponse
+
+    db = SessionLocal()
+    try:
+        si_file = db.query(SIFile).filter(SIFile.id == file_id).first()
+        if not si_file:
+            raise HTTPException(status_code=404, detail="SI file not found")
+        if si_file.status != "ready" or not si_file.local_path:
+            raise HTTPException(status_code=400, detail="SI file not ready for download")
+        if not os.path.isfile(si_file.local_path):
+            raise HTTPException(status_code=404, detail="SI file missing on disk")
+
+        # Determine filename for download
+        filename = Path(si_file.local_path).name
+        return FileResponse(
+            si_file.local_path,
+            media_type="application/octet-stream",
+            filename=filename,
+        )
+    finally:
+        db.close()
+
+
 @router.get("/history")
 async def v1_get_search_history():
     """V1 compat: Get search/extraction history."""

@@ -42,8 +42,29 @@ const Row = ({ index, style, ...props }: any) => {
                 </a>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">相关性</span>
-                <span className="text-xs font-bold text-brand-400">{doc.relevance}%</span>
+                {/* Status badge (Task 5) */}
+                {doc.extracting ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-bold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                    解析中
+                  </span>
+                ) : doc.metrics && ((Array.isArray(doc.metrics) && doc.metrics.length > 0) || (!Array.isArray(doc.metrics) && Object.keys(doc.metrics).length > 0)) ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
+                    📄 全文已提取
+                  </span>
+                ) : doc.progress === 100 || doc.quality === 'good' ? (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400 border border-orange-500/20 font-bold">
+                    ⚠ 提取失败
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-500/10 text-slate-400 border border-slate-500/20 font-bold">
+                    📋 仅摘要
+                  </span>
+                )}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">相关性</span>
+                  <span className="text-xs font-bold text-brand-400">{doc.relevance}%</span>
+                </div>
               </div>
             </div>
 
@@ -111,13 +132,17 @@ const Row = ({ index, style, ...props }: any) => {
                 ) : doc.progress === 100 || doc.quality === 'good' ? (
                    <span className="text-[10px] text-slate-400 font-bold bg-white/5 px-3 py-1 rounded">未能提取核心参数</span>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => handleExtract(doc.doi)}
-                    className="px-4 py-1.5 rounded-lg bg-brand-600/20 hover:bg-brand-600/40 text-brand-400 text-xs font-bold border border-brand-500/30 transition-all"
-                  >
-                    提取参数
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleExtract(doc.doi)}
+                      className="px-4 py-1.5 rounded-lg bg-brand-600/20 hover:bg-brand-600/40 text-brand-400 text-xs font-bold border border-brand-500/30 transition-all"
+                      title="下载 PDF 并用 AI 提取性能参数、工艺条件和稳定性数据"
+                    >
+                      获取全文 & 提取
+                    </button>
+                    <span className="text-[10px] text-slate-600">仅有摘要数据</span>
+                  </div>
                 )}
               </div>
 
