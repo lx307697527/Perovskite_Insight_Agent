@@ -1,58 +1,33 @@
 #!/bin/bash
-# Git post-commit hook - 自动记录提交到 SESSION.md
-#
-# 安装方法：
-# cp .claude/hooks/post-commit .git/hooks/post-commit
-# chmod +x .git/hooks/post-commit
+# PIA Post-Commit Hook
+# 自动记录提交到 SESSION.md
 
-# 记忆文件路径
-SESSION_FILE=".claude/memory/SESSION.md"
-DECISIONS_FILE=".claude/memory/DECISIONS.md"
-PITFALLS_FILE=".claude/memory/PITFALLS.md"
-
-# 获取提交信息
 COMMIT_HASH=$(git rev-parse --short HEAD)
 COMMIT_MSG=$(git log -1 --pretty=%B)
 COMMIT_AUTHOR=$(git log -1 --pretty=%an)
-COMMIT_DATE=$(git log -1 --pretty=%ad --date=format:'%Y-%m-%d %H:%M')
+COMMIT_TIME=$(git log -1 --pretty=%ci)
 
-# 检查是否有记忆系统
-if [ ! -d ".claude/memory" ]; then
-    echo "⚠️  Memory system not initialized. Run 'npm run memory:init' first."
-    exit 0
+SESSION_FILE=".claude/memory/SESSION.md"
+
+# 确保 SESSION.md 存在
+if [ ! -f "$SESSION_FILE" ]; then
+    mkdir -p "$(dirname "$SESSION_FILE")"
+    echo "# Session Log" > "$SESSION_FILE"
+    echo "" >> "$SESSION_FILE"
+    echo "自动记录开发会话中的关键改动。" >> "$SESSION_FILE"
+    echo "" >> "$SESSION_FILE"
 fi
 
-# 判断提交类型
-COMMIT_TYPE=$(echo "$COMMIT_MSG" | grep -oE '^(feat|fix|docs|refactor|perf|test|chore)' || echo "other")
+# 追加提交记录
+echo "## Commit: $COMMIT_HASH" >> "$SESSION_FILE"
+echo "**时间**: $COMMIT_TIME" >> "$SESSION_FILE"
+echo "**作者**: $COMMIT_AUTHOR" >> "$SESSION_FILE"
+echo "" >> "$SESSION_FILE"
+echo '```' >> "$SESSION_FILE"
+echo "$COMMIT_MSG" >> "$SESSION_FILE"
+echo '```' >> "$SESSION_FILE"
+echo "" >> "$SESSION_FILE"
+echo "---" >> "$SESSION_FILE"
+echo "" >> "$SESSION_FILE"
 
-# 根据提交类型决定是否记录
-case $COMMIT_TYPE in
-    feat|fix|refactor)
-        # 重要提交，记录到 SESSION.md
-        echo "" >> "$SESSION_FILE"
-        echo "### Commit: $COMMIT_HASH ($COMMIT_DATE)" >> "$SESSION_FILE"
-        echo "类型: $COMMIT_TYPE | 作者: $COMMIT_AUTHOR" >> "$SESSION_FILE"
-        echo "" >> "$SESSION_FILE"
-        echo "$COMMIT_MSG" >> "$SESSION_FILE"
-        echo "" >> "$SESSION_FILE"
-        echo "---" >> "$SESSION_FILE"
-
-        echo "✅ Commit logged to SESSION.md: $COMMIT_HASH"
-        ;;
-
-    docs)
-        # 文档提交，检查是否包含 ADR 或 PITFALL
-        if echo "$COMMIT_MSG" | grep -qi "ADR\|decision"; then
-            echo "💡 检测到架构决策，请确认是否已更新 $DECISIONS_FILE"
-        fi
-        if echo "$COMMIT_MSG" | grep -qi "pitfall\|bug\|fix"; then
-            echo "💡 检测到踩坑记录，请确认是否已更新 $PITFALLS_FILE"
-        fi
-        ;;
-
-    *)
-        # 其他类型，不记录
-        ;;
-esac
-
-exit 0
+echo "✅ 已记录提交 $COMMIT_HASH 到 SESSION.md"

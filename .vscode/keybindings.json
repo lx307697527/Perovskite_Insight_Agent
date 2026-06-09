@@ -1,0 +1,25 @@
+// PIA 项目推荐的快捷键绑定
+// 复制到用户 keybindings.json 中使用
+[
+  {
+    "key": "ctrl+alt+t",
+    "command": "workbench.action.tasks.runTask",
+    "args": "PIA: View TODO List",
+    "when": "editorTextFocus"
+  },
+  {
+    "key": "ctrl+alt+p",
+    "command": "workbench.action.tasks.runTask",
+    "args": "PIA: View PATTERNS"
+  },
+  {
+    "key": "ctrl+alt+f",
+    "command": "workbench.action.tasks.runTask",
+    "args": "PIA: View PITFALLS"
+  },
+  {
+    "key": "ctrl+alt+d",
+    "command": "workbench.action.tasks.runTask",
+    "args": "PIA: View DECISIONS"
+  }
+]

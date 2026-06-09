@@ -1,0 +1,54 @@
+#!/bin/bash
+# PIA Prepare-Commit-Msg Hook
+# 帮助生成符合规范的提交信息
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+
+# 如果是 merge 或其他自动生成的提交，不修改
+if [ "$COMMIT_SOURCE" = "merge" ] || [ "$COMMIT_SOURCE" = "squash" ] || [ "$COMMIT_SOURCE" = "commit" ]; then
+    exit 0
+fi
+
+# 如果提交信息已经有内容，不修改
+if [ -s "$COMMIT_MSG_FILE" ]; then
+    # 检查是否已有规范的类型前缀
+    FIRST_LINE=$(head -n1 "$COMMIT_MSG_FILE")
+    if echo "$FIRST_LINE" | grep -qE "^(feat|fix|docs|refactor|perf|test|chore|style)\("; then
+        exit 0
+    fi
+fi
+
+# 添加提交规范模板
+TEMPLATE="
+# 提交信息格式: <type>(<scope>): <subject>
+#
+# 类型 (type):
+#   feat     - 新功能
+#   fix      - Bug 修复
+#   docs     - 文档更新
+#   refactor - 重构（不改变功能）
+#   perf     - 性能优化
+#   test     - 测试相关
+#   chore    - 构建/工具链相关
+#   style    - 代码格式（不影响逻辑）
+#
+# 范围 (scope):
+#   frontend - 前端相关
+#   backend  - 后端相关
+#   api      - API 接口
+#   extract  - 数据提取逻辑
+#   memory   - Memory 文件更新
+#
+# 示例:
+#   feat(frontend): 添加快捷问题按钮功能
+#   fix(extract): 修复混合阳离子识别错误
+#   docs(memory): 添加 SSE 连接踩坑记录
+#
+# 请在上方输入提交信息，删除此模板后提交。
+"
+
+# 如果文件为空，添加模板
+if [ ! -s "$COMMIT_MSG_FILE" ]; then
+    echo "$TEMPLATE" >> "$COMMIT_MSG_FILE"
+fi

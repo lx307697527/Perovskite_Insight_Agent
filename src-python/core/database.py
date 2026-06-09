@@ -80,6 +80,9 @@ class Literature(Base):
     local_pdf_path = Column(String)
     si_paths = Column(Text)  # JSON list of SI paths (legacy compat)
 
+    composition = Column(String)  # e.g. "Cs0.05FA0.85MA0.1PbI3"
+    structure = Column(String)  # e.g. "n-i-p" or "p-i-n"
+
     performance_data = Column(Text)  # JSON (PerformanceMetric[])
     process_params = Column(Text)  # JSON
     stability_data = Column(Text)  # JSON
@@ -171,6 +174,29 @@ ExtractionResult = Literature  # Will be replaced by proper queries in Phase 1
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    _migrate_add_columns()
+
+
+def _migrate_add_columns():
+    """Add columns that were introduced after the initial schema."""
+    import sqlite3
+    db_path = get_db_path()
+    if not os.path.exists(db_path):
+        return
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(literature)")
+        existing = {row[1] for row in cursor.fetchall()}
+        if 'composition' not in existing:
+            cursor.execute("ALTER TABLE literature ADD COLUMN composition VARCHAR")
+        if 'structure' not in existing:
+            cursor.execute("ALTER TABLE literature ADD COLUMN structure VARCHAR")
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
 
 
 def migrate_v1_data():

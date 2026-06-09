@@ -331,9 +331,11 @@ class PaperExtractor:
 
         return "\n\n---\n\n".join(parts)
 
-    async def process_local_pdf(self, file_path: str):
+    async def process_local_pdf(self, file_path: str, doi: str | None = None):
         """
-        Processes a PDF file directly from a local path
+        Processes a PDF file directly from a local path.
+        If doi is provided, saves extraction results to DB so the details page
+        can reflect the updated state.
         """
         db = SessionLocal()
         try:
@@ -348,9 +350,9 @@ class PaperExtractor:
                 yield {"status": "failed", "error": "PDF解析失败，无法提取文本内容", "timestamp": datetime.datetime.now().isoformat()}
                 return
 
-            # Cache markdown
-            upload_id = f"local_{os.path.splitext(filename)[0]}"
-            self._save_markdown_cache(upload_id, markdown_content, "main")
+            # Cache markdown — use DOI if available for consistent cache key
+            cache_key = doi or f"local_{os.path.splitext(filename)[0]}"
+            self._save_markdown_cache(cache_key, markdown_content, "main")
 
             yield {"status": "extracting", "progress": 50, "timestamp": datetime.datetime.now().isoformat()}
 
@@ -358,8 +360,67 @@ class PaperExtractor:
             main_content = self._prepare_main_content(markdown_content)
             ai_data = await self._ai_extract(main_content, PEROVSKITE_EXTRACTOR_PROMPT)
 
+            # 3. Save to DB if DOI provided
+            if doi:
+                try:
+                    metrics = ai_data.get('metrics', [])
+
+                    def get_metric(field):
+                        item = next((m for m in metrics if m.get('field') == field), {})
+                        val = item.get('value', 'N/A')
+                        evidence = item.get('evidence', 'Extracted from paper text.')
+                        return self._normalize_metric(field, val), evidence
+
+                    pce_val, pce_ev = get_metric('PCE')
+                    voc_val, voc_ev = get_metric('Voc')
+                    jsc_val, jsc_ev = get_metric('Jsc')
+                    ff_val, ff_ev = get_metric('FF')
+
+                    evidence_map = {"PCE": pce_ev, "Voc": voc_ev, "Jsc": jsc_ev, "FF": ff_ev}
+                    performance_data = {"pce": pce_val, "voc": voc_val, "jsc": jsc_val, "ff": ff_val}
+                    if ai_data.get('device_type'):
+                        performance_data['device_type'] = ai_data['device_type']
+
+                    paper = db.query(Literature).filter(Literature.doi == doi).first()
+                    process_data = ai_data.get('process', [])
+
+                    if not paper:
+                        paper = Literature(
+                            doi=doi,
+                            title=filename,
+                            is_extracted=True,
+                            extraction_stage="stage2",
+                            data_source="fulltext",
+                            composition=ai_data.get('composition', 'Unknown'),
+                            structure=ai_data.get('structure', 'Unknown'),
+                            source_mapping=json.dumps(evidence_map),
+                            performance_data=json.dumps(performance_data),
+                            process_params=json.dumps(process_data) if process_data else None,
+                            local_pdf_path=file_path,
+                            quality_flag="OK",
+                        )
+                        db.add(paper)
+                    else:
+                        paper.is_extracted = True
+                        paper.extraction_stage = "stage2"
+                        paper.data_source = "fulltext"
+                        paper.composition = ai_data.get('composition', 'Unknown')
+                        paper.structure = ai_data.get('structure', 'Unknown')
+                        paper.source_mapping = json.dumps(evidence_map)
+                        paper.performance_data = json.dumps(performance_data)
+                        paper.process_params = json.dumps(process_data) if process_data else paper.process_params
+                        paper.local_pdf_path = file_path
+                        paper.quality_flag = "OK"
+
+                    db.commit()
+                    db.refresh(paper)
+                    invalidate_index(doi)
+                except Exception as e:
+                    db.rollback()
+                    logger.error(f"Failed to save local PDF extraction to DB for {doi}: {e}")
+
             yield {"status": "completed", "result": {
-                "doi": ai_data.get("doi", "local_file"),
+                "doi": doi or ai_data.get("doi", "local_file"),
                 "title": filename,
                 "device_type": ai_data.get("device_type", "solar_cell"),
                 "metrics": ai_data.get("metrics", []),

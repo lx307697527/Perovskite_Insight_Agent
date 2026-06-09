@@ -79,8 +79,12 @@ const DetailsPage: React.FC = () => {
     eventSource.onmessage = (event) => {
       if (!isMounted.current) return;
       const data = JSON.parse(event.data);
-      if (['extracting', 'parsing', 'downloading', 'analyzing_si'].includes(data.status)) {
-        setProgress(data.progress || progress);
+      if (['extracting', 'parsing', 'downloading', 'analyzing_si', 'cached'].includes(data.status)) {
+        const rawProgress = data.progress;
+        const progressValue = typeof rawProgress === 'object' && rawProgress !== null
+          ? (rawProgress as { progress?: number }).progress ?? progress
+          : (typeof rawProgress === 'number' ? rawProgress : progress);
+        setProgress(progressValue);
       } else if (data.status === 'completed') {
         setIsExtracting(false); setProgress(100);
         eventSource.close(); eventSourceRef.current = null;
@@ -89,7 +93,13 @@ const DetailsPage: React.FC = () => {
         handleExtractionError(eventSource, retryCount);
       }
     };
-    eventSource.onerror = () => { if (isMounted.current) handleExtractionError(eventSource, retryCount); };
+    eventSource.onerror = () => {
+      if (!isMounted.current) return;
+      // EventSource fires onerror when the stream closes normally after 'completed'.
+      // Only treat it as a real error if the connection is still supposed to be open.
+      if (eventSource.readyState === EventSource.CLOSED) return;
+      handleExtractionError(eventSource, retryCount);
+    };
   };
 
   const handleExtractionError = (es: EventSource, retryCount: number) => {

@@ -1,0 +1,145 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "PIA: View TODO List",
+      "type": "shell",
+      "command": "code",
+      "args": ["${workspaceFolder}/docs/TODO.md"],
+      "problemMatcher": [],
+      "group": {
+        "kind": "none",
+        "isDefault": false
+      },
+      "presentation": {
+        "reveal": "never"
+      }
+    },
+    {
+      "label": "PIA: View PITFALLS",
+      "type": "shell",
+      "command": "code",
+      "args": ["${workspaceFolder}/.claude/memory/PITFALLS.md"],
+      "problemMatcher": [],
+      "group": "none"
+    },
+    {
+      "label": "PIA: View DECISIONS",
+      "type": "shell",
+      "command": "code",
+      "args": ["${workspaceFolder}/.claude/memory/DECISIONS.md"],
+      "problemMatcher": [],
+      "group": "none"
+    },
+    {
+      "label": "PIA: View PATTERNS",
+      "type": "shell",
+      "command": "code",
+      "args": ["${workspaceFolder}/.claude/memory/PATTERNS.md"],
+      "problemMatcher": [],
+      "group": "none"
+    },
+    {
+      "label": "PIA: View Quick Reference",
+      "type": "shell",
+      "command": "code",
+      "args": ["${workspaceFolder}/docs/WORKFLOW_QUICK_REF.md"],
+      "problemMatcher": [],
+      "group": "none"
+    },
+    {
+      "label": "PIA: Install Git Hooks",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}/.claude/hooks/install.ps1"
+      ],
+      "problemMatcher": [],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "PIA: Update GitNexus Index",
+      "type": "shell",
+      "command": "npx",
+      "args": ["gitnexus", "analyze"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Frontend: Dev Server",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "dev"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Frontend: Type Check",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "type-check"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": ["$tsc"],
+      "group": "test"
+    },
+    {
+      "label": "Frontend: Lint",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "lint"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": ["$eslint-compact"],
+      "group": "test"
+    },
+    {
+      "label": "Backend: Start API Server",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "uvicorn", "api.main:app", "--reload", "--port", "8000"],
+      "options": {
+        "cwd": "${workspaceFolder}/src-python"
+      },
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "PIA: Full Dev Setup",
+      "dependsOn": [
+        "Frontend: Dev Server",
+        "Backend: Start API Server"
+      ],
+      "problemMatcher": [],
+      "group": "build"
+    }
+  ]
+}

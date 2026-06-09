@@ -76,7 +76,7 @@ async def start_deep_extraction(doi: str):
 
     async def event_stream():
         try:
-            gen = extractor.process_local_pdf(local_pdf) if local_pdf else extractor.process_full_paper(doi)
+            gen = extractor.process_local_pdf(local_pdf, doi) if local_pdf else extractor.process_full_paper(doi)
             async for event in gen:
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
@@ -199,7 +199,7 @@ async def v1_start_extraction(doi: str):
 
     async def event_generator():
         try:
-            gen = ext.process_local_pdf(local_pdf) if local_pdf else ext.process_full_paper(doi)
+            gen = ext.process_local_pdf(local_pdf, doi) if local_pdf else ext.process_full_paper(doi)
             async for step in gen:
                 yield f"data: {json.dumps(step)}\n\n"
         except Exception as e:
@@ -310,10 +310,8 @@ async def v1_get_upload_status(upload_id: str):
 
     async def event_generator():
         try:
-            async for step in ext.process_local_pdf(str(file_path)):
+            async for step in ext.process_local_pdf(str(file_path), upload_id):
                 yield f"data: {json.dumps(step)}\n\n"
-                if step.get("status") == "completed":
-                    upload_manager.update_completed(upload_id, step)
 
             await asyncio.sleep(2)
             upload_manager.cleanup(upload_id)

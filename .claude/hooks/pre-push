@@ -1,0 +1,66 @@
+#!/bin/bash
+# PIA Pre-Push Hook
+# 推送前检查是否需要更新 Memory 文件
+
+echo "🔍 PIA Pre-Push 检查..."
+echo ""
+
+# 获取待推送的提交
+COMMITS=$(git log @{u}..HEAD --oneline 2>/dev/null || git log origin/$(git branch --show-current)..HEAD --oneline 2>/dev/null)
+
+if [ -z "$COMMITS" ]; then
+    echo "没有待推送的提交"
+    exit 0
+fi
+
+echo "待推送的提交:"
+echo "$COMMITS"
+echo ""
+
+# 检查提交信息中是否有需要更新 Memory 的关键词
+CHECK_KEYWORDS="fix|bug|pitfall|decision|pattern|refactor|architecture"
+NEED_MEMORY_UPDATE=$(echo "$COMMITS" | grep -iE "$CHECK_KEYWORDS" || true)
+
+if [ -n "$NEED_MEMORY_UPDATE" ]; then
+    echo "⚠️  检测到可能需要更新 Memory 的提交:"
+    echo "$NEED_MEMORY_UPDATE"
+    echo ""
+    echo "请检查是否需要更新以下文件:"
+    echo "  - PITFALLS.md (如果是 Bug 修复)"
+    echo "  - DECISIONS.md (如果是架构决策)"
+    echo "  - PATTERNS.md (如果是新的模式)"
+    echo ""
+    read -p "已确认更新 Memory (或无需更新)? [y/N] " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "❌ 推送已取消，请先更新 Memory 文件"
+        exit 1
+    fi
+fi
+
+# 检查是否有未提交的 Memory 更改
+MEMORY_FILES=".claude/memory/DECISIONS.md .claude/memory/PITFALLS.md .claude/memory/PATTERNS.md .claude/memory/GLOSSARY.md"
+UNCOMMITTED=""
+
+for file in $MEMORY_FILES; do
+    if git diff --quiet "$file" 2>/dev/null; then
+        :
+    else
+        UNCOMMITTED="$UNCOMMITTED $file"
+    fi
+done
+
+if [ -n "$UNCOMMITTED" ]; then
+    echo "⚠️  检测到 Memory 文件有未提交的更改:"
+    echo "$UNCOMMITTED"
+    echo ""
+    read -p "是否继续推送 (Memory 更改将不会包含)? [y/N] " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "❌ 推送已取消，请先提交 Memory 更改"
+        exit 1
+    fi
+fi
+
+echo "✅ Pre-Push 检查通过"
+exit 0

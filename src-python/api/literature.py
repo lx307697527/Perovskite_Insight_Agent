@@ -299,11 +299,30 @@ async def v1_get_paper_details(doi: str):
 
         if not result_data:
             # Fallback: check DB for literature-uploaded PDFs (not registered with upload_manager)
-            db = SessionLocal()
+            db2 = SessionLocal()
             try:
-                paper = db.query(Literature).filter(Literature.doi == doi).first()
+                paper = db2.query(Literature).filter(Literature.doi == doi).first()
                 if not paper:
                     raise HTTPException(status_code=404, detail="Upload result not found or extraction incomplete")
+
+                # Build metrics from DB if extraction was saved
+                metrics = []
+                process_list = []
+                if paper.is_extracted:
+                    import json as _json2
+                    evidence_map = _json2.loads(paper.source_mapping) if paper.source_mapping else {}
+                    perf_data = _json2.loads(paper.performance_data) if paper.performance_data else {}
+                    proc_data = _json2.loads(paper.process_params) if paper.process_params else None
+
+                    if perf_data:
+                        metrics = [
+                            {"label": "PCE", "value": perf_data.get("pce", "N/A"), "unit": "%", "evidence": evidence_map.get("PCE")},
+                            {"label": "Voc", "value": perf_data.get("voc", "N/A"), "unit": "V", "evidence": evidence_map.get("Voc")},
+                            {"label": "Jsc", "value": perf_data.get("jsc", "N/A"), "unit": "mA/cm²", "evidence": evidence_map.get("Jsc")},
+                            {"label": "FF", "value": perf_data.get("ff", "N/A"), "unit": "%", "evidence": evidence_map.get("FF")},
+                        ]
+                    if proc_data and isinstance(proc_data, list):
+                        process_list = proc_data
 
                 return {
                     "success": True,
@@ -313,18 +332,18 @@ async def v1_get_paper_details(doi: str):
                         "year": 2024,
                         "authors": "Uploaded by user",
                         "abstract": paper.abstract or "No abstract available for uploaded files.",
-                        "metrics": [],
-                        "process": [],
-                        "is_extracted": False,
+                        "metrics": metrics,
+                        "process": process_list,
+                        "is_extracted": paper.is_extracted,
                         "device_type": "unknown",
-                        "composition": "Unknown",
-                        "structure": "Unknown",
+                        "composition": paper.composition or "Unknown",
+                        "structure": paper.structure or "Unknown",
                         "doi": doi,
                         "local_pdf_path": paper.local_pdf_path,
                     }
                 }
             finally:
-                db.close()
+                db2.close()
 
         metrics = result_data.get("metrics", [])
         process = result_data.get("process", [])
@@ -432,7 +451,7 @@ async def v1_get_paper_details(doi: str):
                 "authors": paper.authors,
                 "abstract": paper.abstract or "Abstract not available.",
                 "metrics": metrics,
-                "process": _json.loads(paper.process_params) if paper.process_params and paper.is_extracted else [],
+                "process": _json.loads(paper.process_params) if paper.process_params and paper.is_extracted and isinstance(_json.loads(paper.process_params), list) else [],
                 "is_extracted": paper.is_extracted
             }
         }
