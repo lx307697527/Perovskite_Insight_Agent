@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../services/api';
-import type { PaperDetailsResponse } from '../types';
+import { getQASuggestions, createQAConnection } from '../services/qaApi';
+import type { PaperDetailsResponse, QASSEEvent } from '../types';
 import PdfViewer from '../components/PdfViewer';
+import QuickQuestionBox from '../components/QuickQuestionBox';
 import { useAppStore } from '../store';
 
 const DetailsPage: React.FC = () => {
@@ -22,7 +24,15 @@ const DetailsPage: React.FC = () => {
   const [translatedAbstract, setTranslatedAbstract] = useState<string | null>(null);
   const [showTranslation, setShowTranslation] = useState(false);
 
+  // Q&A state
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const [qaAnswer, setQaAnswer] = useState<string>('');
+  const [isQaLoading, setIsQaLoading] = useState(false);
+  const [qaSources, setQaSources] = useState<Array<{ page: number; excerpt: string; file: string }>>([]);
+
   const eventSourceRef = useRef<EventSource | null>(null);
+  const qaCleanupRef = useRef<(() => void) | null>(null);
   const isMounted = useRef(true);
 
   const showToast = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
@@ -37,6 +47,7 @@ const DetailsPage: React.FC = () => {
     return () => {
       isMounted.current = false;
       if (eventSourceRef.current) eventSourceRef.current.close();
+      if (qaCleanupRef.current) qaCleanupRef.current();
     };
   }, []);
 
@@ -56,6 +67,84 @@ const DetailsPage: React.FC = () => {
   useEffect(() => {
     fetchDetails();
   }, [currentDoi]);
+
+  // Fetch Q&A suggestions when paper is extracted
+  useEffect(() => {
+    if (!currentDoi || !paperData?.is_extracted) return;
+
+    const fetchSuggestions = async () => {
+      setIsLoadingSuggestions(true);
+      try {
+        const result = await getQASuggestions(currentDoi);
+        if (isMounted.current) setSuggestions(result);
+      } catch (err) {
+        console.error('Failed to fetch suggestions:', err);
+        // Use fallback suggestions on error
+        if (isMounted.current) {
+          setSuggestions([
+            '这篇论文的主要贡献是什么？',
+            '使用了哪些钙钛矿材料？',
+            '器件的最佳效率是多少？',
+          ]);
+        }
+      } finally {
+        if (isMounted.current) setIsLoadingSuggestions(false);
+      }
+    };
+
+    fetchSuggestions();
+  }, [currentDoi, paperData?.is_extracted]);
+
+  // Handle asking a question
+  const handleAskQuestion = useCallback((question: string) => {
+    if (!currentDoi || isQaLoading) return;
+
+    // Reset state
+    setQaAnswer('');
+    setQaSources([]);
+    setIsQaLoading(true);
+
+    // Clean up previous connection
+    if (qaCleanupRef.current) {
+      qaCleanupRef.current();
+    }
+
+    const handleQaEvent = (event: QASSEEvent) => {
+      if (!isMounted.current) return;
+
+      switch (event.type) {
+        case 'content':
+          if (event.text) {
+            setQaAnswer(prev => prev + event.text);
+          }
+          break;
+        case 'source':
+          if (event.page !== undefined) {
+            setQaSources(prev => [...prev, {
+              page: event.page!,
+              excerpt: event.excerpt || '',
+              file: event.file || 'main',
+            }]);
+          }
+          break;
+        case 'done':
+          setIsQaLoading(false);
+          break;
+        case 'error':
+          setIsQaLoading(false);
+          showToast(event.message || '问答请求失败', 'error');
+          break;
+      }
+    };
+
+    const handleQaError = (error: Error) => {
+      if (!isMounted.current) return;
+      setIsQaLoading(false);
+      showToast(`问答失败: ${error.message}`, 'error');
+    };
+
+    qaCleanupRef.current = createQAConnection(currentDoi, question, handleQaEvent, handleQaError);
+  }, [currentDoi, isQaLoading]);
 
   const handleTranslate = async () => {
     if (translatedAbstract) { setShowTranslation(!showTranslation); return; }
@@ -230,7 +319,7 @@ const DetailsPage: React.FC = () => {
             <div className="h-full flex flex-col items-center justify-center text-center p-8">
               <h3 className="text-xl font-bold mb-4 text-white">数据未提取</h3>
               <p className="text-sm text-slate-500 leading-relaxed mb-10 px-4">核心性能参数尚未从本文献中提取。</p>
-              <button type="button" onClick={handleStartExtraction} className="w-full py-5 rounded-2xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-bold shadow-2xl shadow-brand-500/30 transition-all">
+              <button type="button" onClick={() => handleStartExtraction()} className="w-full py-5 rounded-2xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-bold shadow-2xl shadow-brand-500/30 transition-all">
                 开始 AI 参数解析
               </button>
             </div>
@@ -274,6 +363,46 @@ const DetailsPage: React.FC = () => {
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Q&A Section */}
+              <div className="border-t border-white/5 p-6 space-y-4">
+                <h3 className="text-[10px] font-bold text-brand-400 uppercase tracking-widest flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-brand-500"></span>
+                  精准问答
+                </h3>
+                <QuickQuestionBox
+                  onAsk={handleAskQuestion}
+                  suggestions={suggestions}
+                  isLoading={isQaLoading}
+                />
+                {qaAnswer && (
+                  <div className="mt-4 p-4 rounded-xl bg-white/5 border border-white/10">
+                    <div className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
+                      {qaAnswer}
+                    </div>
+                    {qaSources.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-white/10">
+                        <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-2">来源引用</p>
+                        <div className="flex flex-wrap gap-2">
+                          {qaSources.map((src, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => {
+                                setHighlightedText(src.excerpt);
+                                setViewMode('pdf');
+                              }}
+                              className="text-[10px] px-2 py-1 rounded bg-brand-500/10 text-brand-400 hover:bg-brand-500/20 transition-colors"
+                            >
+                              {src.file === 'si' ? 'SI' : `P.${src.page}`}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
