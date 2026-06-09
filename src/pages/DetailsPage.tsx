@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import { getQASuggestions, createQAConnection } from '../services/qaApi';
 import type { PaperDetailsResponse, QASSEEvent } from '../types';
 import PdfViewer from '../components/PdfViewer';
+import PdfFragmentOverlay from '../components/PdfFragmentOverlay';
 import QuickQuestionBox from '../components/QuickQuestionBox';
 import { useAppStore } from '../store';
 
@@ -30,6 +31,10 @@ const DetailsPage: React.FC = () => {
   const [qaAnswer, setQaAnswer] = useState<string>('');
   const [isQaLoading, setIsQaLoading] = useState(false);
   const [qaSources, setQaSources] = useState<Array<{ page: number; excerpt: string; file: string }>>([]);
+
+  // PDF overlay state
+  const [showPdfOverlay, setShowPdfOverlay] = useState(false);
+  const [pdfOverlayHighlight, setPdfOverlayHighlight] = useState<string | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const qaCleanupRef = useRef<(() => void) | null>(null);
@@ -328,7 +333,8 @@ const DetailsPage: React.FC = () => {
               <div className="flex border-b border-white/5 bg-white/5">
                 {[
                   { id: 'device', label: '核心性能' },
-                  { id: 'process', label: '工艺参数' }
+                  { id: 'process', label: '工艺参数' },
+                  { id: 'si', label: 'SI 数据' },
                 ].map(tab => (
                   <button type="button" key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`flex-grow py-5 text-[10px] font-bold uppercase tracking-widest transition-all ${activeTab === tab.id ? 'text-brand-400 border-b-2 border-brand-500 bg-brand-500/10' : 'text-slate-500 hover:text-slate-300'}`}>
                     {tab.label}
@@ -343,7 +349,26 @@ const DetailsPage: React.FC = () => {
                       <div key={i} onClick={() => { setHighlightedText(m.evidence); setViewMode('pdf'); }} className={`p-5 rounded-2xl border transition-all cursor-pointer group ${highlightedText === m.evidence ? 'bg-brand-500/10 border-brand-500/40 ring-1 ring-brand-500/30 shadow-lg' : 'bg-white/5 border-white/5 hover:border-white/20'}`}>
                         <div className="flex justify-between items-start mb-2">
                           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{m.label}</span>
-                          <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-brand-400">溯源 →</span>
+                          <div className="flex items-center gap-1.5">
+                            {m.evidence && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPdfOverlayHighlight(m.evidence);
+                                  setShowPdfOverlay(true);
+                                }}
+                                className="opacity-0 group-hover:opacity-100 transition-opacity text-brand-400 hover:text-brand-300 p-1 rounded hover:bg-brand-500/10"
+                                title="在 PDF 中查看证据来源"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                                </svg>
+                              </button>
+                            )}
+                            <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-brand-400">溯源 →</span>
+                          </div>
                         </div>
                         <div className="flex items-baseline gap-1.5">
                           <span className="text-2xl font-bold text-slate-100">{m.value}</span>
@@ -352,7 +377,7 @@ const DetailsPage: React.FC = () => {
                       </div>
                     ))}
                   </div>
-                ) : (
+                ) : activeTab === 'process' ? (
                   <div className="space-y-4">
                     {paperData.process.map((item: any, idx: number) => (
                       <div key={idx} className="flex justify-between items-center p-4 rounded-2xl bg-white/5 border border-white/5 hover:border-white/20 transition-all group">
@@ -360,9 +385,44 @@ const DetailsPage: React.FC = () => {
                         <div className="flex items-center gap-3">
                           <span className="text-xs font-bold text-slate-200">{item.value}</span>
                           {item.source === 'si' && <span className="text-[8px] font-bold text-brand-500/60 bg-brand-500/10 px-2 py-0.5 rounded border border-brand-500/20">SI</span>}
+                          {item.evidence && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPdfOverlayHighlight(item.evidence);
+                                setShowPdfOverlay(true);
+                              }}
+                              className="text-slate-600 hover:text-brand-400 transition-colors p-1 rounded hover:bg-brand-500/10"
+                              title="在 PDF 中查看证据来源"
+                            >
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                              </svg>
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
+                  </div>
+                ) : (
+                  /* SI Data Tab */
+                  <div className="space-y-4">
+                    {paperData.process.filter((item: any) => item.source === 'si').length > 0 ? (
+                      paperData.process.filter((item: any) => item.source === 'si').map((item: any, idx: number) => (
+                        <div key={idx} className="flex justify-between items-center p-4 rounded-2xl bg-white/5 border border-white/5 hover:border-white/20 transition-all">
+                          <span className="text-xs text-slate-400">{item.field}</span>
+                          <span className="text-xs font-bold text-slate-200">{item.value}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="py-12 text-center">
+                        <div className="text-2xl mb-3">📄</div>
+                        <p className="text-sm text-slate-600">未发现 SI 补充信息数据</p>
+                        <p className="text-xs text-slate-700 mt-1">深度提取会解析 SI 附件中的参数</p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -418,6 +478,15 @@ const DetailsPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* PDF Fragment Overlay */}
+      {showPdfOverlay && (
+        <PdfFragmentOverlay
+          doi={currentDoi}
+          highlightText={pdfOverlayHighlight || undefined}
+          onClose={() => { setShowPdfOverlay(false); setPdfOverlayHighlight(null); }}
+        />
+      )}
     </div>
   );
 };

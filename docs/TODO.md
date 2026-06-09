@@ -22,26 +22,26 @@
 - **涉及文件**: `src/pages/DetailsPage.tsx`, `src/components/QuickQuestionBox.tsx`
 
 ### 2. P03 PDF 片段浮层集成
-- [ ] 在提取数据卡片中添加 📍 定位图标
-- [ ] 点击 📍 触发 PdfFragmentOverlay 浮层
+- [x] 在提取数据卡片中添加 📍 定位图标
+- [x] 点击 📍 触发 PdfFragmentOverlay 浮层
 - [ ] 浮层仅显示定位点前后 1 段内容（PRD 要求）
-- [ ] 支持"在 PDF 中打开完整页面"按钮
-- **现状**: PdfFragmentOverlay 组件已存在，但未在 DetailsPage 中使用
-- **涉及文件**: `src/pages/DetailsPage.tsx`, `src/components/PdfFragmentOverlay.tsx`
+- [x] 支持"在 PDF 中打开完整页面"按钮
+- **现状**: ✅ 已完成 - DetailsPage/InsightLabPage 均已集成 PdfFragmentOverlay + 📍 定位图标，新增 SI 数据 Tab
+- **涉及文件**: `src/pages/DetailsPage.tsx`, `src/pages/InsightLabPage.tsx`, `src/components/PdfFragmentOverlay.tsx`
 
 ### 3. P03 见解实验室页面完善
-- [ ] 完善 `/insight/:doi` 路由的页面内容
-- [ ] 集成精准问答输入框 + 回答展示
-- [ ] 集成结构化提取卡片（性能指标/工艺参数/稳定性数据）
-- [ ] 添加 PDF 片段浮层支持
-- **现状**: InsightLabPage.tsx 存在但功能不完整
+- [x] 完善 `/insight/:doi` 路由的页面内容
+- [x] 集成精准问答输入框 + 回答展示
+- [x] 集成结构化提取卡片（性能指标/工艺参数/稳定性数据）
+- [x] 添加 PDF 片段浮层支持
+- **现状**: ✅ 已完成 - 修复 process_params 字段名 bug，结构化卡片添加 📍 定位，Stage1 筛选结果展示，空状态提示
 - **涉及文件**: `src/pages/InsightLabPage.tsx`
 
 ### 4. P01b 快捷模式页面完善
-- [ ] 实现单篇文献的完整处理流程
-- [ ] 集成问答 + 提取 + 定位功能
-- [ ] 优化用户引导体验
-- **现状**: QuickModePage.tsx 存在但功能简陋
+- [x] 实现单篇文献的完整处理流程
+- [x] 集成问答 + 提取 + 定位功能（路由至 Insight Lab）
+- [x] 优化用户引导体验
+- **现状**: ✅ 已完成 - 内联 Stage1 提取进度条，提取后显示摘要卡片并跳转至 /insight/，新增最近文献列表
 - **涉及文件**: `src/pages/QuickModePage.tsx`
 
 ---
@@ -157,11 +157,11 @@
 
 | 优先级 | 总数 | 已完成 | 进行中 | 未开始 |
 |--------|------|--------|--------|--------|
-| P0 | 4 | 1 | 0 | 3 |
+| P0 | 4 | 4 | 0 | 0 |
 | P1 | 5 | 0 | 0 | 5 |
 | P2 | 5 | 0 | 0 | 5 |
 | 技术债务 | 3 | 0 | 0 | 3 |
-| **合计** | **17** | **1** | **0** | **16** |
+| **合计** | **17** | **4** | **0** | **13** |
 
 ---
 
@@ -169,5 +169,6 @@
 
 | 日期 | 变更内容 |
 |------|----------|
+| 2026-06-10 | 完成 P0 全部 3 项待办：PDF 片段浮层集成 + 见解实验室完善 + 快捷模式升级 |
 | 2026-06-09 | 完成 P03 精准问答快捷问题按钮功能 |
 | 2026-06-09 | 初始创建，基于 PRD V2.1 审查 |

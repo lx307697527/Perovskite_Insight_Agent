@@ -25,7 +25,7 @@ interface ExtractedMetric {
 
 interface StructuredData {
   performance: ExtractedMetric[];
-  process: { field: string; value: string; source?: string }[];
+  process: { field: string; value: string; source?: string; evidence?: string }[];
   stability?: { metric: string; value: string; protocol?: string }[];
 }
 
@@ -55,6 +55,7 @@ const InsightLabPage: React.FC = () => {
   // PDF overlay
   const [showPdf, setShowPdf] = useState(false);
   const [pdfTargetPage, setPdfTargetPage] = useState<number | null>(null);
+  const [pdfHighlightText, setPdfHighlightText] = useState<string | null>(null);
 
   const closeRef = useRef<(() => void) | null>(null);
   const extractCloseRef = useRef<(() => void) | null>(null);
@@ -87,12 +88,34 @@ const InsightLabPage: React.FC = () => {
           // Parse structured data from literature (GAP-006)
           if (lit.is_extracted) {
             const perf = lit.performance_data ? JSON.parse(lit.performance_data) : null;
-            const proc = lit.process_data ? JSON.parse(lit.process_data) : null;
+            const proc = lit.process_params ? JSON.parse(lit.process_params) : null;
             if (perf || proc) {
+              // Performance: support both flat { pce, voc, ... } and nested { metrics: [...] }
+              const perfMetrics = Array.isArray(perf?.metrics)
+                ? perf.metrics
+                : perf ? Object.entries(perf)
+                    .filter(([k]) => ['pce', 'voc', 'jsc', 'ff'].includes(k.toLowerCase()))
+                    .map(([label, data]: [string, any]) => ({
+                      label: label.toUpperCase(),
+                      value: data?.value ?? data ?? 'N/A',
+                      unit: data?.unit ?? '',
+                      evidence: data?.evidence,
+                      scan_direction: data?.scan_direction,
+                      has_spo: data?.has_spo,
+                    })) : [];
+
+              // Process: support both array and { steps: [...] } object
+              const procSteps = Array.isArray(proc) ? proc : (proc?.steps || []);
+
+              // Stability: nested inside performance_data
+              const stability = perf?.stability
+                ? (Array.isArray(perf.stability) ? perf.stability : [perf.stability])
+                : [];
+
               setStructuredData({
-                performance: perf?.metrics || [],
-                process: proc?.steps || [],
-                stability: perf?.stability || [],
+                performance: perfMetrics,
+                process: procSteps,
+                stability,
               });
             }
           }
@@ -336,7 +359,7 @@ const InsightLabPage: React.FC = () => {
               )}
 
               {/* Structured Extraction Cards (GAP-006) */}
-              {structuredData && extractionStage === 'stage2' && (
+              {literature && extractionStage === 'stage2' && structuredData && (
                 <div className="space-y-4">
                   {/* Performance Metrics Card */}
                   {structuredData.performance && structuredData.performance.length > 0 && (
@@ -364,9 +387,23 @@ const InsightLabPage: React.FC = () => {
                               {metric.unit && <span className="text-xs text-slate-400">{metric.unit}</span>}
                             </div>
                             {metric.evidence && (
-                              <p className="text-[9px] text-slate-600 mt-1 truncate" title={metric.evidence}>
-                                📍 {metric.evidence.slice(0, 50)}...
-                              </p>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPdfHighlightText(metric.evidence || null);
+                                  setPdfTargetPage(null);
+                                  setShowPdf(true);
+                                }}
+                                className="mt-1 flex items-center gap-1 text-[9px] text-brand-400/50 hover:text-brand-400 transition-colors max-w-full"
+                                title={metric.evidence}
+                              >
+                                <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                                </svg>
+                                <span className="truncate">{metric.evidence.slice(0, 40)}...</span>
+                              </button>
                             )}
                           </div>
                         ))}
@@ -386,9 +423,30 @@ const InsightLabPage: React.FC = () => {
                           <div key={idx} className="bg-white/5 rounded-lg p-3">
                             <span className="text-[10px] font-bold text-slate-500 uppercase">{step.field}</span>
                             <p className="text-sm text-slate-200 mt-1">{step.value}</p>
-                            {step.source && (
-                              <span className="text-[9px] text-slate-600">{step.source === 'si' ? '📄 SI' : '📄 正文'}</span>
-                            )}
+                            <div className="flex items-center gap-2 mt-1">
+                              {step.source && (
+                                <span className="text-[9px] text-slate-600">{step.source === 'si' ? '📄 SI' : '📄 正文'}</span>
+                              )}
+                              {step.evidence && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setPdfHighlightText(step.evidence || null);
+                                    setPdfTargetPage(null);
+                                    setShowPdf(true);
+                                  }}
+                                  className="flex items-center gap-1 text-[9px] text-brand-400/50 hover:text-brand-400 transition-colors"
+                                  title={step.evidence}
+                                >
+                                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                                  </svg>
+                                  <span className="truncate max-w-[80px]">{step.evidence.slice(0, 30)}...</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -419,6 +477,33 @@ const InsightLabPage: React.FC = () => {
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Stage1 screening result — basic info + prompt for deep extraction */}
+              {literature && extractionStage === 'stage1' && !isExtracting && (
+                <div className="glass-card rounded-2xl p-6 border-white/5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Stage1 筛选完成</h4>
+                  </div>
+                  <p className="text-sm text-slate-500 leading-relaxed mb-4">
+                    基础信息已解析。运行深度提取以获取完整的性能指标、工艺参数和稳定性数据。
+                  </p>
+                  {literature.abstract && (
+                    <div className="p-4 rounded-xl bg-white/5 border border-white/5">
+                      <p className="text-[11px] text-slate-400 leading-relaxed line-clamp-4">{literature.abstract}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* No extraction yet — empty state hint */}
+              {literature && extractionStage === 'none' && !isExtracting && (
+                <div className="glass-card rounded-2xl p-8 border-white/5 text-center">
+                  <div className="text-2xl mb-3">📋</div>
+                  <p className="text-sm text-slate-500 mb-1">尚未提取</p>
+                  <p className="text-xs text-slate-600">点击上方「快速筛选」或「深度提取」开始解析论文数据</p>
                 </div>
               )}
 
@@ -536,7 +621,8 @@ const InsightLabPage: React.FC = () => {
         <PdfFragmentOverlay
           doi={doi}
           targetPage={pdfTargetPage}
-          onClose={() => setShowPdf(false)}
+          highlightText={pdfHighlightText || undefined}
+          onClose={() => { setShowPdf(false); setPdfHighlightText(null); }}
         />
       )}
     </div>
