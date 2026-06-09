@@ -15,7 +15,8 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(Get-ChildItem -Path \"d:\\\\Code_Space\\\\Perovskite_Insight_Agent\" -Directory -Depth 1)",
-      "Bash(Select-Object FullName)"
+      "Bash(Select-Object FullName)",
+      "Bash(git push *)"
     ]
   }
 }
