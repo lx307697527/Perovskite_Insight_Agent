@@ -3,6 +3,9 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 import datetime
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_db_path():
@@ -216,7 +219,7 @@ def migrate_v1_data():
     if os.path.exists(migrated_marker):
         return False
 
-    print(f"[Migration] Detected V1 database at {v1_path}, starting migration...")
+    logger.info(f"[Migration] Detected V1 database at {v1_path}, starting migration...")
 
     try:
         v1_conn = sqlite3.connect(v1_path)
@@ -227,7 +230,7 @@ def migrate_v1_data():
         ).fetchall()
         v1_conn.close()
     except Exception as e:
-        print(f"[Migration] Failed to read V1 database: {e}")
+        logger.error(f"[Migration] Failed to read V1 database: {e}")
         return False
 
     db = SessionLocal()
@@ -257,7 +260,7 @@ def migrate_v1_data():
             db.add(lit)
 
         db.commit()
-        print(f"[Migration] Migrated {len(rows)} papers from V1 database.")
+        logger.info(f"[Migration] Migrated {len(rows)} papers from V1 database.")
 
         # Mark V1 directory as migrated (rename)
         marker_path = migrated_marker
@@ -267,7 +270,7 @@ def migrate_v1_data():
         return True
     except Exception as e:
         db.rollback()
-        print(f"[Migration] Error during migration: {e}")
+        logger.error(f"[Migration] Error during migration: {e}")
         return False
     finally:
         db.close()

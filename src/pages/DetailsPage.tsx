@@ -3,7 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../services/api';
 import { getLiterature } from '../services/literatureApi';
 import { getQASuggestions, createQAConnection } from '../services/qaApi';
-import type { PaperDetailsResponse, QASSEEvent, ProcessRecipe, SIFile } from '../types';
+import { getPdfUrl } from '../services/fetchUtils';
+import type { PaperDetailsResponse, QASSEEvent, ProcessRecipe, SIFile, PerformanceDataFlat, StabilityDataItem, SourceMappingItem, MetricItem, MetricField, MetricValue } from '../types';
 import PdfViewer from '../components/PdfViewer';
 import PdfFragmentOverlay from '../components/PdfFragmentOverlay';
 import QuickQuestionBox from '../components/QuickQuestionBox';
@@ -72,10 +73,10 @@ interface V2Literature {
   data_source: string;
   quality_flag?: string;
   local_pdf_path?: string;
-  performance_data?: any;   // parsed JSON (API returns parsed)
-  process_params?: any;     // parsed JSON
-  stability_data?: any;     // parsed JSON
-  source_mapping?: any;     // parsed JSON
+  performance_data?: PerformanceDataFlat | null;
+  process_params?: ProcessRecipe[] | { steps: ProcessRecipe[] } | null;
+  stability_data?: StabilityDataItem[] | StabilityDataItem | null;
+  source_mapping?: SourceMappingItem[] | null;
   si_files?: SIFileInfo[];
 }
 
@@ -85,7 +86,7 @@ function parseV2ToDetails(lit: V2Literature): DetailsData {
 
   // Performance: support both flat { pce, voc, ... } and nested { metrics: [...] }
   const perfMetrics: ExtractedMetric[] = Array.isArray(perf?.metrics)
-    ? perf.metrics.map((m: any) => ({
+    ? perf.metrics.map((m: MetricItem) => ({
         label: m.field || m.label || 'Unknown',
         value: m.value ?? 'N/A',
         unit: m.unit ?? '',
@@ -96,7 +97,7 @@ function parseV2ToDetails(lit: V2Literature): DetailsData {
     : perf
       ? Object.entries(perf)
           .filter(([k]) => ['pce', 'voc', 'jsc', 'ff'].includes(k.toLowerCase()))
-          .map(([label, data]: [string, any]) => ({
+          .map(([label, data]: [string, MetricValue]) => ({
             label: label.toUpperCase(),
             value: data?.value ?? data ?? 'N/A',
             unit: data?.unit ?? (label.toLowerCase() === 'pce' || label.toLowerCase() === 'ff' ? '%' : label.toLowerCase() === 'voc' ? 'V' : 'mA/cm²'),
@@ -114,7 +115,7 @@ function parseV2ToDetails(lit: V2Literature): DetailsData {
   // Stability: prefer dedicated column, fallback to nested in performance_data
   const rawStability = lit.stability_data || perf?.stability || null;
   const stability: StabilityItem[] = rawStability
-    ? (Array.isArray(rawStability) ? rawStability : [rawStability]).map((s: any) => ({
+    ? (Array.isArray(rawStability) ? rawStability : [rawStability]).map((s: StabilityDataItem) => ({
         metric: s.metric || s.protocol || '',
         value: s.value || s.t80 || s.t90 || s.retention || '',
         protocol: s.protocol,
@@ -188,12 +189,21 @@ const DetailsPage: React.FC = () => {
 
   useEffect(() => {
     isMounted.current = true;
+    // Close old SSE connections when DOI changes (e.g. user navigates to a different paper)
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    if (qaCleanupRef.current) {
+      qaCleanupRef.current();
+      qaCleanupRef.current = null;
+    }
     return () => {
       isMounted.current = false;
       if (eventSourceRef.current) eventSourceRef.current.close();
       if (qaCleanupRef.current) qaCleanupRef.current();
     };
-  }, []);
+  }, [currentDoi]);
 
   // ============================================================
   // Fetch details — V2 with V1 fallback
@@ -224,7 +234,7 @@ const DetailsPage: React.FC = () => {
             extraction_stage: v1Data.is_extracted ? 'stage2' : 'none',
             quality_flag: 'OK',
             data_source: 'abstract',
-            metrics: (v1Data.metrics || []).map((m: any) => ({
+            metrics: (v1Data.metrics || []).map((m: MetricField) => ({
               label: m.label || m.field || 'Unknown',
               value: m.value ?? 'N/A',
               unit: m.unit ?? '',
@@ -343,7 +353,13 @@ const DetailsPage: React.FC = () => {
 
     eventSource.onmessage = (event) => {
       if (!isMounted.current) return;
-      const data = JSON.parse(event.data);
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (e) {
+        console.error('SSE parse error:', e);
+        return;
+      }
       if (['extracting', 'parsing', 'downloading', 'analyzing_si', 'cached'].includes(data.status)) {
         const rawProgress = data.progress;
         const progressValue = typeof rawProgress === 'object' && rawProgress !== null
@@ -505,7 +521,7 @@ const DetailsPage: React.FC = () => {
                   </div>
                 ) : (
                   <div className="w-full h-[70vh] rounded-3xl overflow-hidden border border-white/10 bg-black/40 shadow-2xl">
-                    <PdfViewer url={api.getPdfUrl(currentDoi)} highlightText={highlightedText} />
+                    <PdfViewer url={getPdfUrl(currentDoi)} highlightText={highlightedText} />
                   </div>
                 )}
               </div>
@@ -555,7 +571,7 @@ const DetailsPage: React.FC = () => {
                   { id: 'si', label: 'SI 数据' },
                   { id: 'stability', label: '稳定性' },
                 ].map(tab => (
-                  <button type="button" key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`flex-grow py-5 text-[10px] font-bold uppercase tracking-widest transition-all ${activeTab === tab.id ? 'text-brand-400 border-b-2 border-brand-500 bg-brand-500/10' : 'text-slate-500 hover:text-slate-300'}`}>
+                  <button type="button" key={tab.id} onClick={() => setActiveTab(tab.id as 'device' | 'process' | 'si' | 'stability')} className={`flex-grow py-5 text-[10px] font-bold uppercase tracking-widest transition-all ${activeTab === tab.id ? 'text-brand-400 border-b-2 border-brand-500 bg-brand-500/10' : 'text-slate-500 hover:text-slate-300'}`}>
                     {tab.label}
                   </button>
                 ))}

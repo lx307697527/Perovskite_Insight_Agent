@@ -7,6 +7,9 @@ import os
 import json
 import base64
 import hashlib
+import logging
+
+logger = logging.getLogger(__name__)
 
 _SETTINGS_DIR = os.path.join(
     os.environ.get('APPDATA', os.path.expanduser('~')),
@@ -67,7 +70,7 @@ def decrypt_settings() -> dict:
         plaintext = fernet.decrypt(encrypted)
         return json.loads(plaintext.decode("utf-8"))
     except Exception as e:
-        print(f"[Security] Failed to decrypt settings: {e}")
+        logger.error(f"[Security] Failed to decrypt settings: {e}")
         return {}
 
 
@@ -87,8 +90,8 @@ def migrate_from_plaintext() -> bool:
         # Rename old file instead of deleting
         migrated = _LEGACY_FILE + ".migrated"
         os.rename(_LEGACY_FILE, migrated)
-        print("[Security] Migrated plaintext config to encrypted settings.")
+        logger.info("[Security] Migrated plaintext config to encrypted settings.")
         return True
     except Exception as e:
-        print(f"[Security] Migration failed: {e}")
+        logger.error(f"[Security] Migration failed: {e}")
         return False

@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store';
 import * as compareApi from '../services/compareApi';
 import * as api from '../services/api';
+import { API_BASE } from '../services/fetchUtils';
 import type { ComparisonFilters, ComparisonData, QualityWarning } from '../services/compareApi';
+import type { MetricField, ProcessRecipe } from '../types';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend,
   ResponsiveContainer, ScatterChart, Scatter, CartesianGrid, Cell,
@@ -83,11 +85,11 @@ const ComparisonPage: React.FC = () => {
             try {
               const details = await api.fetchPaperDetails(doi);
               const metricsMap: Record<string, string> = {};
-              details.metrics.forEach((m: any) => { metricsMap[m.label.toUpperCase()] = String(m.value); });
+              details.metrics.forEach((m: MetricField) => { metricsMap[m.label.toUpperCase()] = String(m.value); });
               return {
                 DOI: doi,
                 Title: details.title,
-                Composition: details.process?.find((p: any) => p.field === 'composition')?.value || 'N/A',
+                Composition: details.process?.find((p: ProcessRecipe) => p.field === 'composition')?.value || 'N/A',
                 Structure: details.is_extracted ? 'n-i-p' : 'N/A',
                 ...metricsMap,
               };
@@ -130,7 +132,7 @@ const ComparisonPage: React.FC = () => {
         compareApi.downloadBlob(blob, `comparison.${ext}`);
       } else {
         // Legacy export
-        window.open(api.getExportUrl(comparisonDois), '_blank');
+        window.open(`${API_BASE}/api/export/excel?dois=${comparisonDois.join(',')}`, '_blank');
       }
       showToast(`导出 ${format.toUpperCase()} 成功`, 'success');
     } catch (err) {
@@ -899,8 +901,7 @@ ${tableRows} \\\\
                           />
                           <Tooltip
                             contentStyle={{ background: '#1e293b', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', fontSize: 12 }}
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            formatter={(_val: any, _name: any, props: any) => [props?.payload?.name || '']}
+                            formatter={(_val: number | string, _name: string, props: { payload?: { name?: string } }) => [props?.payload?.name || '']}
                             labelFormatter={() => ''}
                           />
                           <Scatter

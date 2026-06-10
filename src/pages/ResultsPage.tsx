@@ -2,10 +2,41 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { List } from 'react-window';
 import * as api from '../services/api';
-import type { Paper } from '../types';
+import type { Paper, MetricItem, MetricField, DeviceMetrics } from '../types';
 import { useAppStore } from '../store';
 
-const Row = ({ index, style, ...props }: any) => {
+/** Local compat type — metric may come from V1 (label) or V2 (field) format */
+interface CompatMetric {
+  field?: string;
+  label?: string;
+  value: string | number;
+  unit?: string;
+  evidence?: string;
+}
+
+/** Extended Paper with runtime-only fields added by this page's state management */
+interface ResultItem extends Paper {
+  extracting?: boolean;
+  progress?: number;
+  metrics?: (MetricItem | MetricField)[] | Partial<DeviceMetrics>;
+  quality?: string;
+  qualityText?: string;
+  relevance?: number;
+  localPath?: string;
+}
+
+interface RowDataProps {
+  filteredResults: ResultItem[];
+  selectedDocs: string[];
+  toggleSelect: (doi: string) => void;
+  onOpenDetails: (doi: string) => void;
+  handleExtract: (doi: string, retryCount?: number) => void;
+}
+
+/** Full props: data props from parent + index/style injected by List component */
+type RowFullProps = RowDataProps & { index: number; style: React.CSSProperties };
+
+const Row = ({ index, style, ...props }: RowFullProps) => {
   const { filteredResults, selectedDocs, toggleSelect, onOpenDetails, handleExtract } = props;
   const doc = filteredResults[index];
   const [isExpanded, setIsExpanded] = useState(false);
@@ -99,7 +130,7 @@ const Row = ({ index, style, ...props }: any) => {
                   </div>
                 ) : doc.metrics && Array.isArray(doc.metrics) && doc.metrics.length > 0 ? (
                   <>
-                    {doc.metrics.slice(0, 4).map((metric: any, idx: number) => (
+                    {(doc.metrics as CompatMetric[]).slice(0, 4).map((metric: CompatMetric, idx: number) => (
                       <div key={idx} className="flex flex-col">
                         <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">{metric.field || metric.label}</span>
                         <span className="text-sm font-bold text-emerald-400" title={metric.evidence}>
@@ -164,12 +195,21 @@ const Row = ({ index, style, ...props }: any) => {
 const ResultsPage: React.FC = () => {
   const navigate = useNavigate();
   const { searchResults, searchWarning, setSelectedDoi } = useAppStore();
-  const [results, setResults] = useState<Paper[]>(searchResults);
+  const [results, setResults] = useState<ResultItem[]>(searchResults);
   const [selectedDocs, setSelectedDocs] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
 
   const eventSourcesRef = useRef<Map<string, EventSource>>(new Map());
   const extractingRef = useRef<Set<string>>(new Set());
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+      eventSourcesRef.current.forEach(es => es.close());
+    };
+  }, []);
 
   useEffect(() => {
     results.forEach(doc => {
@@ -186,12 +226,6 @@ const ResultsPage: React.FC = () => {
       }
     });
   }, [results]);
-
-  useEffect(() => {
-    return () => {
-      eventSourcesRef.current.forEach(es => es.close());
-    };
-  }, []);
 
   const filteredResults = results.filter(doc =>
     doc.title.toLowerCase().includes(filter.toLowerCase()) ||
@@ -222,7 +256,14 @@ const ResultsPage: React.FC = () => {
     eventSourcesRef.current.set(doi, eventSource);
 
     eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+      if (!isMounted.current) return;
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (e) {
+        console.error('SSE parse error:', e);
+        return;
+      }
       if (['extracting', 'parsing', 'downloading', 'analyzing_si'].includes(data.status)) {
         setResults(prev => prev.map(doc =>
           doc.doi === doi ? { ...doc, progress: data.progress || doc.progress } : doc
@@ -246,6 +287,7 @@ const ResultsPage: React.FC = () => {
     };
 
     eventSource.onerror = () => {
+      if (!isMounted.current) return;
       handleSSEError(doi, eventSource, retryCount);
     };
   };

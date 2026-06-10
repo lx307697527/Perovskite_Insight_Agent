@@ -1,7 +1,6 @@
 import type { QASSEEvent, QuickQuestion } from '../types';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-const DEFAULT_TIMEOUT = 10000;
+import { API_BASE, DEFAULT_TIMEOUT } from './fetchUtils';
+import { createSSEStream } from './sse';
 
 export async function getQASuggestions(doi: string): Promise<string[]> {
   const controller = new AbortController();
@@ -43,63 +42,16 @@ export function createQAConnection(
   onEvent: (event: QASSEEvent) => void,
   onError: (error: Error) => void,
 ): () => void {
-  const controller = new AbortController();
-  let closed = false;
-
-  const startStream = async () => {
-    try {
-      const resp = await fetch(`${API_BASE}/api/qa/${encodeURIComponent(doi)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question }),
-        signal: controller.signal,
-      });
-
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || `Request failed: ${resp.statusText}`);
-      }
-
-      const reader = resp.body?.getReader();
-      if (!reader) throw new Error('No response stream');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (!closed) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event = JSON.parse(line.slice(6)) as QASSEEvent;
-              onEvent(event);
-              if (event.type === 'done' || event.type === 'error') {
-                closed = true;
-                return;
-              }
-            } catch {
-              // Skip malformed lines
-            }
-          }
-        }
-      }
-    } catch (err) {
-      if (!closed) {
-        onError(err instanceof Error ? err : new Error('Q&A connection failed'));
-      }
-    }
-  };
-
-  startStream();
-
-  return () => {
-    closed = true;
-    controller.abort();
-  };
+  return createSSEStream<QASSEEvent>({
+    url: `/api/qa/${encodeURIComponent(doi)}`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    },
+    onEvent,
+    onError,
+    isTerminal: (event) => event.type === 'done' || event.type === 'error',
+    errorLabel: 'Q&A',
+  });
 }

@@ -1,12 +1,10 @@
 /**
  * Multi-Document Chat API service — cross-project literature Q&A.
- * Follows the same SSE streaming pattern as qaApi.ts.
  */
 
 import type { ChatSession, ChatMessage } from '../types';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-const DEFAULT_TIMEOUT = 10000;
+import { API_BASE, DEFAULT_TIMEOUT } from './fetchUtils';
+import { createSSEStream } from './sse';
 
 export interface ChatSSEEvent {
   type: 'content' | 'source' | 'done' | 'error';
@@ -40,69 +38,22 @@ export function createChatConnection(
   onEvent: (event: ChatSSEEvent) => void,
   onError: (error: Error) => void,
 ): () => void {
-  const controller = new AbortController();
-  let closed = false;
-
-  const startStream = async () => {
-    try {
-      const resp = await fetch(`${API_BASE}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project_id: projectId,
-          question,
-          context_dois: contextDois.length > 0 ? contextDois : null,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || `Request failed: ${resp.statusText}`);
-      }
-
-      const reader = resp.body?.getReader();
-      if (!reader) throw new Error('No response stream');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (!closed) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event = JSON.parse(line.slice(6)) as ChatSSEEvent;
-              onEvent(event);
-              if (event.type === 'done' || event.type === 'error') {
-                closed = true;
-                return;
-              }
-            } catch {
-              // Skip malformed lines
-            }
-          }
-        }
-      }
-    } catch (err) {
-      if (!closed) {
-        onError(err instanceof Error ? err : new Error('Chat connection failed'));
-      }
-    }
-  };
-
-  startStream();
-
-  return () => {
-    closed = true;
-    controller.abort();
-  };
+  return createSSEStream<ChatSSEEvent>({
+    url: '/api/chat',
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        question,
+        context_dois: contextDois.length > 0 ? contextDois : null,
+      }),
+    },
+    onEvent,
+    onError,
+    isTerminal: (event) => event.type === 'done' || event.type === 'error',
+    errorLabel: 'Chat',
+  });
 }
 
 export async function listChatSessions(projectId: string): Promise<ChatSession[]> {

@@ -16,7 +16,12 @@
       "Bash(git commit -m ' *)",
       "Bash(Get-ChildItem -Path \"d:\\\\Code_Space\\\\Perovskite_Insight_Agent\" -Directory -Depth 1)",
       "Bash(Select-Object FullName)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(cd /d d:\\\\Code_Space\\\\Perovskite_Insight_Agent)",
+      "Bash(npx tsc *)",
+      "Bash(Select-String \"error TS\")",
+      "Bash(Measure-Object)",
+      "Bash(Select-Object -ExpandProperty Count)"
     ]
   }
 }

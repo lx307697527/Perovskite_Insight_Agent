@@ -1,24 +1,5 @@
 import type { ConfigStatus, DomainType, Settings } from '../types';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-const DEFAULT_TIMEOUT = 10000;
-
-async function fetchJSON<T>(url: string, options?: RequestInit, timeout = DEFAULT_TIMEOUT): Promise<T> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-  try {
-    const resp = await fetch(url, { ...options, signal: controller.signal });
-    if (!resp.ok) {
-      const body = await resp.json().catch(() => ({}));
-      throw new Error(body.detail || `Request failed: ${resp.statusText}`);
-    }
-    const data = await resp.json();
-    if (!data.success) throw new Error(data.error || 'Request failed');
-    return data.data as T;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
+import { API_BASE, fetchJSON } from './fetchUtils';
 
 export interface AIEnginePayload {
   apiKey: string;

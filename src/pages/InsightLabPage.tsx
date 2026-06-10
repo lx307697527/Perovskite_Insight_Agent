@@ -4,7 +4,7 @@ import { useAppStore } from '../store';
 import * as qaApi from '../services/qaApi';
 import * as literatureApi from '../services/literatureApi';
 import { getExtractionStatus, cancelExtraction, createStage1Connection, createDeepExtractionConnection } from '../services/extractApi';
-import type { QASSEEvent, SSEEvent, QuickQuestion, Literature } from '../types';
+import type { QASSEEvent, SSEEvent, QuickQuestion, Literature, MetricValue } from '../types';
 import AnswerCard from '../components/AnswerCard';
 import StageProgress from '../components/StageProgress';
 import PdfFragmentOverlay from '../components/PdfFragmentOverlay';
@@ -87,15 +87,21 @@ const InsightLabPage: React.FC = () => {
           setLiterature(lit);
           // Parse structured data from literature (GAP-006)
           if (lit.is_extracted) {
-            const perf = lit.performance_data ? JSON.parse(lit.performance_data) : null;
-            const proc = lit.process_params ? JSON.parse(lit.process_params) : null;
+            let perf = null;
+            let proc = null;
+            try {
+              perf = lit.performance_data ? JSON.parse(lit.performance_data) : null;
+            } catch (e) { console.error('Failed to parse performance_data:', e); }
+            try {
+              proc = lit.process_params ? JSON.parse(lit.process_params) : null;
+            } catch (e) { console.error('Failed to parse process_params:', e); }
             if (perf || proc) {
               // Performance: support both flat { pce, voc, ... } and nested { metrics: [...] }
               const perfMetrics = Array.isArray(perf?.metrics)
                 ? perf.metrics
                 : perf ? Object.entries(perf)
                     .filter(([k]) => ['pce', 'voc', 'jsc', 'ff'].includes(k.toLowerCase()))
-                    .map(([label, data]: [string, any]) => ({
+                    .map(([label, data]: [string, MetricValue]) => ({
                       label: label.toUpperCase(),
                       value: data?.value ?? data ?? 'N/A',
                       unit: data?.unit ?? '',
@@ -124,8 +130,9 @@ const InsightLabPage: React.FC = () => {
         setHistory(hist);
         if (status) setExtractionStage(status.stage);
       }
-    } catch {
-      // Paper may not be in DB yet
+    } catch (error) {
+      // Paper may not be in DB yet, or data parsing failed
+      console.warn('Failed to load paper data for', targetDoi, error);
     }
   };
 

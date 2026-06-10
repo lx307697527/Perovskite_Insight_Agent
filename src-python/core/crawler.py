@@ -1,7 +1,10 @@
+import logging
 import httpx
 import os
 from typing import List, Dict
 from .translator import translator
+
+logger = logging.getLogger(__name__)
 
 class PaperCrawler:
     """
@@ -32,7 +35,7 @@ class PaperCrawler:
         Search using Semantic Scholar API (Best for Semantic/Natural Language)
         """
         search_q = await translator.translate_query(query)
-        print(f"DEBUG: Starting SS search for: {search_q}")
+        logger.debug("Starting SS search for: %s", search_q)
         # Added abstract to fields
         url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={search_q}&limit=10&fields=title,authors,year,venue,externalIds,relevanceScore,abstract"
         async with httpx.AsyncClient(timeout=10.0, headers=self.headers) as client:
@@ -56,10 +59,10 @@ class PaperCrawler:
                         "cached": False,
                         "source": "Semantic Scholar"
                     })
-                print(f"DEBUG: SS search success, found {len(results)} results")
+                logger.debug("SS search success, found %d results", len(results))
                 return results
             except Exception as e:
-                print(f"DEBUG: SS Search error: {e}")
+                logger.error("SS Search error: %s", e)
                 return []
 
     def _reconstruct_abstract(self, inverted_index: Dict) -> str:
@@ -74,7 +77,7 @@ class PaperCrawler:
             # Sort by position and join
             word_positions.sort()
             return " ".join([w[1] for w in word_positions])
-        except:
+        except (KeyError, TypeError, ValueError, AttributeError):
             return ""
 
     async def search_openalex(self, query: str) -> List[Dict]:
@@ -82,7 +85,7 @@ class PaperCrawler:
         Real-time search using OpenAlex API (Best for coverage)
         """
         search_q = await translator.translate_query(query)
-        print(f"DEBUG: Starting OpenAlex search for: {search_q}")
+        logger.debug("Starting OpenAlex search for: %s", search_q)
         url = f"https://api.openalex.org/works?search={search_q}&sort=relevance_score:desc"
         async with httpx.AsyncClient(timeout=10.0, headers=self.headers) as client:
             try:
@@ -108,10 +111,10 @@ class PaperCrawler:
                         "cached": False,
                         "source": "OpenAlex"
                     })
-                print(f"DEBUG: OpenAlex search success, found {len(results)} results")
+                logger.debug("OpenAlex search success, found %d results", len(results))
                 return results
             except Exception as e:
-                print(f"DEBUG: OpenAlex Search error: {e}")
+                logger.error("OpenAlex Search error: %s", e)
                 return []
 
     async def search_papers_dual_engine(self, query: str) -> List[Dict]:
@@ -119,7 +122,7 @@ class PaperCrawler:
         Concurrent dual-engine search with merging and de-duplication
         """
         import asyncio
-        print(f"DEBUG: Dual-engine search triggered for: {query}")
+        logger.debug("Dual-engine search triggered for: %s", query)
         
         # Wrap each call to ensure they don't block each other
         tasks = [
@@ -144,7 +147,7 @@ class PaperCrawler:
                 merged[doi]['relevance'] = min(100, merged[doi]['relevance'] + 5)
         
         # Sort by relevance
-        print(f"DEBUG: Merged {len(merged)} unique results")
+        logger.debug("Merged %d unique results", len(merged))
         return sorted(merged.values(), key=lambda x: x['relevance'], reverse=True)
 
     async def get_paper_by_doi(self, doi: str) -> Dict:
@@ -166,14 +169,14 @@ class PaperCrawler:
                     "abstract": work.get('abstract')
                 }
             except Exception as e:
-                print(f"DEBUG: Fetch paper by DOI error: {e}")
+                logger.error("Fetch paper by DOI error: %s", e)
                 return None
 
     async def get_pdf_links(self, doi: str) -> Dict[str, str]:
         """
         Discovery of PDF and SI links using OpenAlex API
         """
-        print(f"DEBUG: Resolving PDF links for DOI: {doi}")
+        logger.debug("Resolving PDF links for DOI: %s", doi)
         url = f"https://api.openalex.org/works/https://doi.org/{doi}"
         
         async with httpx.AsyncClient(timeout=10.0, headers=self.headers) as client:
@@ -184,14 +187,14 @@ class PaperCrawler:
                     # Try to get the best OA location
                     best_oa = data.get('best_oa_location', {})
                     if best_oa and best_oa.get('pdf_url'):
-                        print(f"DEBUG: Found PDF via OpenAlex: {best_oa['pdf_url']}")
+                        logger.info("Found PDF via OpenAlex: %s", best_oa['pdf_url'])
                         return {
                             "main": best_oa['pdf_url'],
                             "si": [] # OpenAlex doesn't always provide SI URLs directly
                         }
                 
                 # Fallback heuristic for common publishers if OpenAlex fails
-                print(f"DEBUG: OpenAlex resolution failed, using heuristic fallback")
+                logger.info("OpenAlex resolution failed, using heuristic fallback")
                 if "10.1126" in doi: # Science
                     doi_suffix = doi.split('/')[-1]
                     return {
@@ -234,7 +237,7 @@ class PaperCrawler:
                     "si": []
                 }
             except Exception as e:
-                print(f"DEBUG: PDF resolution error: {e}")
+                logger.error("PDF resolution error: %s", e)
                 return {"main": f"https://doi.org/{doi}", "si": []}
 
     async def download_file(self, url: str, filename: str) -> tuple[str, str]:
@@ -259,11 +262,11 @@ class PaperCrawler:
                 return local_path, ""
             except httpx.HTTPStatusError as e:
                 error_msg = f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
-                print(f"Download error: {error_msg}")
+                logger.error("Download error: %s", error_msg)
                 return "", error_msg
             except Exception as e:
                 error_msg = str(e)
-                print(f"Download error: {error_msg}")
+                logger.error("Download error: %s", error_msg)
                 return "", error_msg
 
     def clear_downloads(self):
@@ -275,7 +278,7 @@ class PaperCrawler:
                     if os.path.isfile(file_path):
                         os.unlink(file_path)
                 except Exception as e:
-                    print(f"Error clearing file {file_path}: {e}")
+                    logger.warning("Error clearing file %s: %s", file_path, e)
 
 # Initialize with a local path
 def get_crawler():

@@ -1,29 +1,5 @@
 import type { Literature } from '../types';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-const DEFAULT_TIMEOUT = 10000;
-
-async function fetchJSON<T>(url: string, options?: RequestInit, timeout = DEFAULT_TIMEOUT): Promise<T> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(new Error('请求超时，请检查后端服务是否运行 (localhost:8000)')), timeout);
-  try {
-    const resp = await fetch(url, { ...options, signal: controller.signal });
-    if (!resp.ok) {
-      const body = await resp.json().catch(() => ({}));
-      throw new Error(body.detail || `Request failed: ${resp.statusText}`);
-    }
-    const data = await resp.json();
-    if (!data.success) throw new Error(data.error || 'Request failed');
-    return data.data as T;
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('请求超时，请检查后端服务是否运行 (localhost:8000)');
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
+import { API_BASE, fetchJSON } from './fetchUtils';
 
 export interface AddResult {
   doi: string;
@@ -102,11 +78,16 @@ export async function moveFromInbox(doi: string, projectId: string): Promise<{ m
  * Start extraction for a literature item.
  */
 export async function startExtraction(doi: string): Promise<void> {
-  const resp = await fetch(`${API_BASE}/api/extract/${encodeURIComponent(doi)}/stage1`, {
-    method: 'POST',
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok && !resp.headers.get('content-type')?.includes('text/event-stream')) {
-    throw new Error(data.detail || data.error || 'Failed to start extraction');
+  try {
+    const resp = await fetch(`${API_BASE}/api/extract/${encodeURIComponent(doi)}/stage1`, {
+      method: 'POST',
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok && !resp.headers.get('content-type')?.includes('text/event-stream')) {
+      throw new Error(data.detail || data.error || 'Failed to start extraction');
+    }
+  } catch (error) {
+    console.error('Start extraction error:', error);
+    throw error;
   }
 }

@@ -1,7 +1,6 @@
 import type { SSEEvent } from '../types';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
-const DEFAULT_TIMEOUT = 10000;
+import { API_BASE, DEFAULT_TIMEOUT } from './fetchUtils';
+import { createSSEStream } from './sse';
 
 export interface StageProgressInfo {
   progress: number;
@@ -22,69 +21,21 @@ export interface ExtractionStatus {
 }
 
 /**
- * Create Stage1 SSE connection (uses EventSource since it's a POST with SSE response).
+ * Create Stage1 SSE connection (POST-based streaming).
  */
 export function createStage1Connection(
   doi: string,
   onEvent: (event: SSEEvent) => void,
   onError: (error: Error) => void,
 ): () => void {
-  const controller = new AbortController();
-  let closed = false;
-
-  const startStream = async () => {
-    try {
-      const resp = await fetch(`${API_BASE}/api/extract/${encodeURIComponent(doi)}/stage1`, {
-        method: 'POST',
-        signal: controller.signal,
-      });
-
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || `Stage1 request failed: ${resp.statusText}`);
-      }
-
-      const reader = resp.body?.getReader();
-      if (!reader) throw new Error('No response stream');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (!closed) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6)) as SSEEvent;
-              onEvent(data);
-              if (data.status === 'completed' || data.status === 'failed' || data.status === 'cached') {
-                closed = true;
-                return;
-              }
-            } catch {
-              // Skip malformed
-            }
-          }
-        }
-      }
-    } catch (err) {
-      if (!closed) {
-        onError(err instanceof Error ? err : new Error('Stage1 connection failed'));
-      }
-    }
-  };
-
-  startStream();
-  return () => {
-    closed = true;
-    controller.abort();
-  };
+  return createSSEStream<SSEEvent>({
+    url: `/api/extract/${encodeURIComponent(doi)}/stage1`,
+    init: { method: 'POST' },
+    onEvent,
+    onError,
+    isTerminal: (data) => data.status === 'completed' || data.status === 'failed' || data.status === 'cached',
+    errorLabel: 'Stage1 extraction',
+  });
 }
 
 /**
@@ -95,62 +46,14 @@ export function createDeepExtractionConnection(
   onEvent: (event: SSEEvent) => void,
   onError: (error: Error) => void,
 ): () => void {
-  const controller = new AbortController();
-  let closed = false;
-
-  const startStream = async () => {
-    try {
-      const resp = await fetch(`${API_BASE}/api/extract/${encodeURIComponent(doi)}/deep`, {
-        method: 'POST',
-        signal: controller.signal,
-      });
-
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.detail || `Deep extraction request failed: ${resp.statusText}`);
-      }
-
-      const reader = resp.body?.getReader();
-      if (!reader) throw new Error('No response stream');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (!closed) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6)) as SSEEvent;
-              onEvent(data);
-              if (data.status === 'completed' || data.status === 'failed' || data.status === 'cached') {
-                closed = true;
-                return;
-              }
-            } catch {
-              // Skip malformed
-            }
-          }
-        }
-      }
-    } catch (err) {
-      if (!closed) {
-        onError(err instanceof Error ? err : new Error('Deep extraction connection failed'));
-      }
-    }
-  };
-
-  startStream();
-  return () => {
-    closed = true;
-    controller.abort();
-  };
+  return createSSEStream<SSEEvent>({
+    url: `/api/extract/${encodeURIComponent(doi)}/deep`,
+    init: { method: 'POST' },
+    onEvent,
+    onError,
+    isTerminal: (data) => data.status === 'completed' || data.status === 'failed' || data.status === 'cached',
+    errorLabel: 'Deep extraction',
+  });
 }
 
 /**
@@ -175,23 +78,33 @@ export async function getExtractionStatus(doi: string): Promise<ExtractionStatus
  * Cancel an ongoing extraction.
  */
 export async function cancelExtraction(doi: string): Promise<void> {
-  const resp = await fetch(`${API_BASE}/api/extract/${encodeURIComponent(doi)}/cancel`, {
-    method: 'POST',
-  });
-  const data = await resp.json();
-  if (!data.success) throw new Error(data.error || 'Cancel failed');
+  try {
+    const resp = await fetch(`${API_BASE}/api/extract/${encodeURIComponent(doi)}/cancel`, {
+      method: 'POST',
+    });
+    const data = await resp.json();
+    if (!data.success) throw new Error(data.error || 'Cancel failed');
+  } catch (error) {
+    console.error('Cancel extraction error:', error);
+    throw error;
+  }
 }
 
 /**
  * Start extraction for a DOI (triggers Stage1 extraction).
  */
 export async function startExtraction(doi: string): Promise<void> {
-  const resp = await fetch(`${API_BASE}/api/extract/${encodeURIComponent(doi)}/stage1`, {
-    method: 'POST',
-  });
-  const data = await resp.json().catch(() => ({}));
-  // If response is not OK but not a stream, throw error
-  if (!resp.ok && !resp.headers.get('content-type')?.includes('text/event-stream')) {
-    throw new Error(data.detail || data.error || 'Failed to start extraction');
+  try {
+    const resp = await fetch(`${API_BASE}/api/extract/${encodeURIComponent(doi)}/stage1`, {
+      method: 'POST',
+    });
+    const data = await resp.json().catch(() => ({}));
+    // If response is not OK but not a stream, throw error
+    if (!resp.ok && !resp.headers.get('content-type')?.includes('text/event-stream')) {
+      throw new Error(data.detail || data.error || 'Failed to start extraction');
+    }
+  } catch (error) {
+    console.error('Start extraction error:', error);
+    throw error;
   }
 }

@@ -7,6 +7,7 @@ import os
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from core.stage1 import stage1_screener
 from core.progress import remove_tracker, get_tracker
@@ -14,6 +15,10 @@ from core.database import SessionLocal, Literature
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/extract", tags=["extract"])
+
+
+class ExtractLocalBody(BaseModel):
+    path: str
 
 
 def _resolve_local_pdf(doi: str) -> str | None:
@@ -216,12 +221,12 @@ async def v1_start_extraction(doi: str):
 
 
 @router.post("/local")
-async def v1_extract_local(body: dict):
+async def v1_extract_local(body: ExtractLocalBody):
     """V1 compat: Extract from local PDF path.
 
     Request body: { "path": "/path/to/file.pdf" }
     """
-    path = body.get("path", "")
+    path = body.path
     try:
         file_path = _validate_file_path(path)
         if not file_path.exists():

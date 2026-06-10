@@ -22,6 +22,15 @@ class AddLiteratureRequest(BaseModel):
     project_id: Optional[str] = None
 
 
+class ResolveDoiRequest(BaseModel):
+    doi: str
+    project_id: Optional[str] = None
+
+
+class TranslateRequest(BaseModel):
+    text: str
+
+
 class MoveToProjectRequest(BaseModel):
     project_id: str
 
@@ -159,10 +168,10 @@ async def upload_literature(file: UploadFile = File(...), project_id: Optional[s
 
 
 @router.post("/literature/doi")
-async def resolve_doi(body: dict):
+async def resolve_doi(body: ResolveDoiRequest):
     """Resolve DOI: download PDF + fetch metadata."""
-    doi = body.get("doi", "").strip()
-    project_id = body.get("project_id")
+    doi = body.doi.strip()
+    project_id = body.project_id
 
     if not DOI_PATTERN.match(doi):
         raise HTTPException(status_code=400, detail="Invalid DOI format")
@@ -460,10 +469,10 @@ async def v1_get_paper_details(doi: str):
 
 
 @router.post("/translate")
-async def v1_translate_abstract(request: dict):
+async def v1_translate_abstract(request: TranslateRequest):
     """V1 compat: Translate text."""
     from core.translator import translator
-    text = request.get("text")
+    text = request.text
     if not text:
         return {"success": False, "error": "No text provided"}
     translated = await translator.translate_text(text)

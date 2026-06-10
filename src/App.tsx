@@ -1,8 +1,7 @@
 import React, { useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useAppStore } from './store';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+import { API_BASE } from './services/fetchUtils';
 
 async function checkBackendHealth(): Promise<boolean> {
   const controller = new AbortController();

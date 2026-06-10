@@ -1,8 +1,11 @@
 """
 Translation module - Handles query translation using AI
 """
+import logging
 import openai
 import os
+
+logger = logging.getLogger(__name__)
 
 # Initialize OpenAI Client with a placeholder, will be updated by Settings
 client = openai.AsyncOpenAI(api_key="placeholder")
@@ -25,7 +28,7 @@ class Translator:
         if not any('\u4e00' <= char <= '\u9fff' for char in query):
             return query
 
-        print(f"DEBUG: Translating query: {query}")
+        logger.debug("Translating query: %s", query)
         try:
             resp = await client.chat.completions.create(
                 model=current_model,
@@ -37,10 +40,10 @@ class Translator:
                 timeout=10.0
             )
             translated = resp.choices[0].message.content.strip()
-            print(f"DEBUG: Translation success: {translated}")
+            logger.debug("Translation success: %s", translated)
             return translated
         except Exception as e:
-            print(f"DEBUG: Translation failed: {e}")
+            logger.warning("Translation failed: %s", e)
             return query
 
     async def translate_text(self, text: str, target_lang: str = "Chinese") -> str:
@@ -59,7 +62,7 @@ class Translator:
             )
             return resp.choices[0].message.content.strip()
         except Exception as e:
-            print(f"Translation error: {e}")
+            logger.error("Translation error: %s", e)
             return text
 
 # Singleton instance

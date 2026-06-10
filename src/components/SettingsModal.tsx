@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import * as api from '../services/api';
 import * as configApi from '../services/configApi';
 
 interface SettingsModalProps {
@@ -132,7 +131,18 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
     localStorage.setItem('pia_config', JSON.stringify(config));
 
     try {
-      await api.saveSettings(config);
+      // V2: save AI engine config via dedicated endpoint
+      await configApi.saveAIEngine({
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model,
+        stage1Model: config.stage1Model,
+        stage2Model: config.stage2Model,
+      });
+      // Save proxy if configured
+      if (config.proxyUrl) {
+        await configApi.saveProxy({ proxyUrl: config.proxyUrl });
+      }
       setStatus('success');
       setTimeout(() => {
         onClose();

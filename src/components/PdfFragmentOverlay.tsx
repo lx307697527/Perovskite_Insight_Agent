@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { getPdfUrl } from '../services/fetchUtils';
 
 interface PdfFragmentOverlayProps {
   doi: string;
@@ -10,7 +11,7 @@ interface PdfFragmentOverlayProps {
 const PdfFragmentOverlay: React.FC<PdfFragmentOverlayProps> = ({ doi, targetPage, highlightText, onClose }) => {
   const [currentPage, setCurrentPage] = useState(targetPage || 1);
   const [totalPages, setTotalPages] = useState<number | null>(null);
-  const pdfUrl = `${import.meta.env.VITE_API_BASE || 'http://localhost:8000'}/api/pdf/${encodeURIComponent(doi)}`;
+  const pdfUrl = getPdfUrl(doi);
 
   // Jump to target page when it changes
   useEffect(() => {

@@ -225,3 +225,33 @@ export interface ConfigStatus {
 
 // --- Backward Compat Alias ---
 export type Paper = Literature;
+
+// --- Structured Extraction Data (parsed from JSON columns in Literature) ---
+export interface PerformanceDataFlat {
+  pce?: MetricValue;
+  voc?: MetricValue;
+  jsc?: MetricValue;
+  ff?: MetricValue;
+  metrics?: MetricItem[];
+  stability?: StabilityDataItem[];
+}
+
+export interface StabilityDataItem {
+  metric?: string;
+  value: string;
+  protocol?: string;
+  t80?: string;
+  t90?: string;
+  retention?: string;
+  conditions?: string;
+  evidence?: string;
+}
+
+export interface SourceMappingItem {
+  field: string;
+  page?: number;
+  paragraph?: number;
+  tableId?: string;
+  evidence?: string;
+}
+

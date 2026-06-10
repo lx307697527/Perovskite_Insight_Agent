@@ -7,6 +7,7 @@ import SettingsModal from '../components/SettingsModal';
 import * as literatureApi from '../services/literatureApi';
 import * as projectApi from '../services/projectApi';
 import * as api from '../services/api';
+import { API_BASE } from '../services/fetchUtils';
 import type { Literature, Project } from '../types';
 
 const HomePage: React.FC = () => {
@@ -344,7 +345,7 @@ const HomePage: React.FC = () => {
         <div className="h-4 w-[1px] bg-white/10" />
         <button
           type="button"
-          onClick={() => { window.location.href = api.getExportUrl(['all']); }}
+          onClick={() => { window.location.href = `${API_BASE}/api/export/excel?dois=all`; }}
           className="text-slate-400 hover:text-white transition-colors text-xs font-bold"
         >
           全库导出

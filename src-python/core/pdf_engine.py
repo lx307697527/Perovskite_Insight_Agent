@@ -1,8 +1,11 @@
 import os
 import asyncio
+import logging
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
+
+logger = logging.getLogger(__name__)
 
 # Try to import PDF parsing libraries
 try:
@@ -11,7 +14,7 @@ try:
     # Disabling docling backend for now to prevent hard crashes and rely on pdfplumber/PyPDF2.
     DOCLING_AVAILABLE = False
 except Exception as e:
-    print(f"Docling not available: {e}")
+    logger.warning("Docling not available: %s", e)
     DOCLING_AVAILABLE = False
 
 try:
@@ -34,17 +37,17 @@ RAPIDOCR_AVAILABLE = False
 try:
     from paddleocr import PaddleOCR
     PADDLEOCR_AVAILABLE = True
-    print("OCR Engine: PaddleOCR available")
+    logger.info("OCR Engine: PaddleOCR available")
 except ImportError:
-    print("OCR Engine: PaddleOCR not installed (pip install paddleocr paddlepaddle)")
+    logger.info("OCR Engine: PaddleOCR not installed (pip install paddleocr paddlepaddle)")
 
 # Try to import RapidOCR (fallback)
 try:
     from rapidocr_onnxruntime import RapidOCR
     RAPIDOCR_AVAILABLE = True
-    print("OCR Engine: RapidOCR available")
+    logger.info("OCR Engine: RapidOCR available")
 except ImportError:
-    print("OCR Engine: RapidOCR not installed")
+    logger.info("OCR Engine: RapidOCR not installed")
 
 # Global OCR instance (lazy initialization)
 _paddle_ocr = None
@@ -64,9 +67,9 @@ def _get_paddle_ocr():
                 show_log=False,
                 use_gpu=False  # CPU mode for compatibility
             )
-            print("OCR: PaddleOCR initialized successfully")
+            logger.info("OCR: PaddleOCR initialized successfully")
         except Exception as e:
-            print(f"OCR: PaddleOCR init failed: {e}")
+            logger.error("OCR: PaddleOCR init failed: %s", e)
             _paddle_ocr = None
     return _paddle_ocr
 
@@ -77,9 +80,9 @@ def _get_rapid_ocr():
     if _rapid_ocr is None and RAPIDOCR_AVAILABLE:
         try:
             _rapid_ocr = RapidOCR()
-            print("OCR: RapidOCR initialized successfully")
+            logger.info("OCR: RapidOCR initialized successfully")
         except Exception as e:
-            print(f"OCR: RapidOCR init failed: {e}")
+            logger.error("OCR: RapidOCR init failed: %s", e)
             _rapid_ocr = None
     return _rapid_ocr
 
@@ -103,7 +106,7 @@ def _ocr_image(img_array) -> Optional[str]:
                         lines.append(text)
                 return "\n".join(lines)
         except Exception as e:
-            print(f"PaddleOCR error: {e}")
+            logger.error("PaddleOCR error: %s", e)
 
     # Fallback to RapidOCR
     rapid_ocr = _get_rapid_ocr()
@@ -113,7 +116,7 @@ def _ocr_image(img_array) -> Optional[str]:
             if result:
                 return "\n".join([line[1] for line in result])
         except Exception as e:
-            print(f"RapidOCR error: {e}")
+            logger.error("RapidOCR error: %s", e)
 
     return None
 
@@ -131,15 +134,15 @@ class PDFProcessor:
         if DOCLING_AVAILABLE:
             try:
                 self.converter = DocumentConverter()
-                print("PDF Processor: Using Docling backend")
+                logger.info("PDF Processor: Using Docling backend")
             except Exception as e:
-                print(f"Docling init failed: {e}")
+                logger.error("Docling init failed: %s", e)
                 self.converter = None
 
         if not self.converter and PDFPLUMBER_AVAILABLE:
-            print("PDF Processor: Using pdfplumber backend")
+            logger.info("PDF Processor: Using pdfplumber backend")
         elif not self.converter and PYPDF2_AVAILABLE:
-            print("PDF Processor: Using PyPDF2 backend")
+            logger.info("PDF Processor: Using PyPDF2 backend")
 
     async def convert_to_markdown(self, file_path: str) -> Optional[str]:
         """
@@ -147,7 +150,7 @@ class PDFProcessor:
         Uses thread pool to avoid blocking the event loop.
         """
         if not os.path.exists(file_path):
-            print(f"Error: File not found {file_path}")
+            logger.error("File not found: %s", file_path)
             return None
 
         # Try Docling first
@@ -161,29 +164,29 @@ class PDFProcessor:
                 )
                 return result.document.export_to_markdown()
             except Exception as e:
-                print(f"Docling error: {e}, trying fallback...")
+                logger.error("Docling error: %s, trying fallback...", e)
 
         # Fallback to PyMuPDF + RapidOCR
         try:
             return await self._parse_with_pymupdf_ocr(file_path)
         except Exception as e:
-            print(f"PyMuPDF/OCR error: {e}")
+            logger.error("PyMuPDF/OCR error: %s", e)
 
         # Fallback to pdfplumber
         if PDFPLUMBER_AVAILABLE:
             try:
                 return await self._parse_with_pdfplumber(file_path)
             except Exception as e:
-                print(f"pdfplumber error: {e}")
+                logger.error("pdfplumber error: %s", e)
 
         # Fallback to PyPDF2
         if PYPDF2_AVAILABLE:
             try:
                 return await self._parse_with_pypdf2(file_path)
             except Exception as e:
-                print(f"PyPDF2 error: {e}")
+                logger.error("PyPDF2 error: %s", e)
 
-        print("Warning: No PDF parser available")
+        logger.warning("No PDF parser available")
         return None
 
     async def _parse_with_pymupdf_ocr(self, file_path: str) -> Optional[str]:
@@ -205,7 +208,7 @@ class PDFProcessor:
                         text_parts.append(f"## Page {i+1}\n\n{text}\n")
                     else:
                         # Scanned page or image-based page, fallback to OCR
-                        print(f"DEBUG: Page {i+1} has no native text, running OCR...")
+                        logger.debug("Page %d has no native text, running OCR...", i + 1)
                         pix = page.get_pixmap(dpi=150)
 
                         # Convert pixmap to numpy array (RGB)
@@ -224,7 +227,7 @@ class PDFProcessor:
                         if page_text:
                             text_parts.append(f"## Page {i+1} (OCR)\n\n{page_text}\n")
                         else:
-                            print(f"DEBUG: Page {i+1} OCR returned no text")
+                            logger.debug("Page %d OCR returned no text", i + 1)
                             text_parts.append(f"## Page {i+1}\n\n[OCR failed to extract text]\n")
 
             return "\n".join(text_parts)
