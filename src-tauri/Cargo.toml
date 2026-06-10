@@ -1,0 +1,24 @@
+[package]
+name = "perovskite-insight-agent"
+version = "0.1.0"
+description = "Perovskite Insight Agent"
+authors = ["PIA"]
+edition = "2021"
+
+[lib]
+name = "perovskite_insight_agent_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.dev]
+codegen-units = 1
+
+[profile.release]
+codegen-units = 1

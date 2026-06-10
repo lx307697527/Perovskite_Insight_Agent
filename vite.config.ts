@@ -17,6 +17,11 @@ export default defineConfig({
     strictPort: true,
   },
   optimizeDeps: {
-    include: ['react-window'],
+    include: [
+      'react-window',
+      'es-toolkit',
+      'es-toolkit/compat',
+    ],
+    force: true,
   },
 })

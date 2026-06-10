@@ -503,7 +503,7 @@ npm run tauri dev -- --verbose
 **后端调试：**
 ```bash
 # 单独启动后端（开发模式，热重载）
-cd backend
+cd src-python
 uvicorn main:app --reload --port 8000
 
 # 测试 SSE 端点
