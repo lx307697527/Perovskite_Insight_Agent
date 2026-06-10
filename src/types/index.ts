@@ -213,6 +213,7 @@ export interface Settings {
   stage2Model?: string;
   proxyUrl?: string;
   domain?: DomainType;
+  domains?: DomainType[];
 }
 
 // --- Config Status ---

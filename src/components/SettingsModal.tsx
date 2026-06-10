@@ -12,6 +12,9 @@ interface SystemStatus {
   cacheSizeMb: number;
   totalPapers: number;
   extractedCount: number;
+  pdfCount: number;
+  oldestFileDate: string | null;
+  indexSizeMb: number;
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
@@ -30,8 +33,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
     cacheSizeMb: 0,
     totalPapers: 0,
     extractedCount: 0,
+    pdfCount: 0,
+    oldestFileDate: null,
+    indexSizeMb: 0,
   });
   const [clearingCache, setClearingCache] = useState(false);
+  const [clearingExpired, setClearingExpired] = useState(false);
 
   // Load config and system status
   useEffect(() => {
@@ -55,6 +62,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
         cacheSizeMb: cacheData.cache_size_mb,
         totalPapers: cacheData.total_papers,
         extractedCount: cacheData.extracted_count,
+        pdfCount: cacheData.pdf_count ?? 0,
+        oldestFileDate: cacheData.oldest_file_date ?? null,
+        indexSizeMb: cacheData.index_size_mb ?? 0,
       });
     } catch (err) {
       console.error('Failed to load system status:', err);
@@ -89,7 +99,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   };
 
   const handleClearCache = async () => {
-    if (!confirm('确定清理缓存？这会删除已下载的 PDF 文件，但不会删除数据库中的提取记录。')) {
+    if (!confirm('确定清理全部缓存？这会删除已下载的 PDF 文件，但不会删除数据库中的提取记录。')) {
       return;
     }
 
@@ -101,6 +111,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
       console.error('Failed to clear cache:', err);
     } finally {
       setClearingCache(false);
+    }
+  };
+
+  const handleClearExpired = async () => {
+    setClearingExpired(true);
+    try {
+      const result = await configApi.clearExpiredCache(30);
+      await loadSystemStatus();
+      alert(result.message);
+    } catch (err) {
+      console.error('Failed to clear expired cache:', err);
+    } finally {
+      setClearingExpired(false);
     }
   };
 
@@ -258,30 +281,62 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                   </span>
                 </div>
 
-                {/* Cache Management */}
-                <div className="flex items-center justify-between p-4 bg-white/5 rounded-xl mb-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-brand-500/10 flex items-center justify-center">
-                      <span className="text-brand-400">📦</span>
+                {/* Cache Management (P2-13 enhanced) */}
+                <div className="p-4 bg-white/5 rounded-xl mb-3">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-brand-500/10 flex items-center justify-center">
+                        <span className="text-brand-400">📦</span>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-slate-200">PDF 缓存</p>
+                        <p className="text-[10px] text-slate-500">
+                          {systemStatus.totalPapers} 篇文献 · {systemStatus.extractedCount} 已提取
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-slate-200">PDF 缓存</p>
-                      <p className="text-[10px] text-slate-500">
-                        {systemStatus.totalPapers} 篇文献 · {systemStatus.extractedCount} 已提取
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
                     <span className="text-sm font-bold text-slate-300">
                       {systemStatus.cacheSizeMb.toFixed(1)} MB
                     </span>
+                  </div>
+
+                  {/* Detailed breakdown */}
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    <div className="bg-white/[0.03] rounded-lg p-2 text-center">
+                      <p className="text-[10px] text-slate-500">PDF 文件</p>
+                      <p className="text-xs font-bold text-slate-300">{systemStatus.pdfCount} 个</p>
+                    </div>
+                    <div className="bg-white/[0.03] rounded-lg p-2 text-center">
+                      <p className="text-[10px] text-slate-500">向量索引</p>
+                      <p className="text-xs font-bold text-slate-300">{systemStatus.indexSizeMb.toFixed(1)} MB</p>
+                    </div>
+                    <div className="bg-white/[0.03] rounded-lg p-2 text-center">
+                      <p className="text-[10px] text-slate-500">最早缓存</p>
+                      <p className="text-xs font-bold text-slate-300">
+                        {systemStatus.oldestFileDate
+                          ? new Date(systemStatus.oldestFileDate).toLocaleDateString('zh-CN')
+                          : '—'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Cleanup buttons */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleClearExpired}
+                      disabled={clearingExpired || systemStatus.cacheSizeMb === 0}
+                      className="flex-1 text-[10px] text-amber-400 hover:text-amber-300 font-bold py-1.5 rounded-lg border border-amber-500/20 hover:border-amber-500/40 transition-all disabled:opacity-50 bg-amber-500/5"
+                    >
+                      {clearingExpired ? '清理中...' : '清理 30 天前'}
+                    </button>
                     <button
                       type="button"
                       onClick={handleClearCache}
                       disabled={clearingCache || systemStatus.cacheSizeMb === 0}
-                      className="text-[10px] text-red-400 hover:text-red-300 font-bold px-2 py-1 rounded border border-red-500/20 hover:border-red-500/40 transition-all disabled:opacity-50"
+                      className="flex-1 text-[10px] text-red-400 hover:text-red-300 font-bold py-1.5 rounded-lg border border-red-500/20 hover:border-red-500/40 transition-all disabled:opacity-50 bg-red-500/5"
                     >
-                      {clearingCache ? '清理中...' : '清理'}
+                      {clearingCache ? '清理中...' : '清理全部'}
                     </button>
                   </div>
                 </div>

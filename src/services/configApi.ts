@@ -73,10 +73,33 @@ export async function verifyEmbedding(): Promise<{ status: string }> {
   return fetchJSON<{ status: string }>(`${API_BASE}/api/config/embedding/verify`, { method: 'POST' });
 }
 
-export async function getCacheStats(): Promise<{ total_papers: number; extracted_count: number; cache_size_mb: number }> {
+export async function getCacheStats(): Promise<{
+  total_papers: number;
+  extracted_count: number;
+  cache_size_mb: number;
+  pdf_count: number;
+  oldest_file_date: string | null;
+  index_size_mb: number;
+}> {
   return fetchJSON(`${API_BASE}/api/config/cache`);
 }
 
 export async function clearCache(): Promise<{ message: string }> {
   return fetchJSON<{ message: string }>(`${API_BASE}/api/config/cache`, { method: 'DELETE' });
+}
+
+export async function clearExpiredCache(olderThanDays: number): Promise<{ message: string; removed_count: number }> {
+  return fetchJSON<{ message: string; removed_count: number }>(`${API_BASE}/api/config/cache/expired`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ older_than_days: olderThanDays }),
+  });
+}
+
+export async function updateDomainsMulti(domains: string[]): Promise<{ message: string; domains: string[] }> {
+  return fetchJSON<{ message: string; domains: string[] }>(`${API_BASE}/api/config/domains/multi`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ domains }),
+  });
 }

@@ -4,6 +4,12 @@ import { useAppStore } from '../store';
 import * as compareApi from '../services/compareApi';
 import * as api from '../services/api';
 import type { ComparisonFilters, ComparisonData, QualityWarning } from '../services/compareApi';
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, Legend,
+  ResponsiveContainer, ScatterChart, Scatter, CartesianGrid, Cell,
+} from 'recharts';
+
+const CHART_COLORS = ['#6366f1', '#06b6d4', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
 
 interface CustomMetric {
   id: string;
@@ -39,6 +45,13 @@ const ComparisonPage: React.FC = () => {
   // Export dropdown
   const [exportOpen, setExportOpen] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
+
+  // Chart state (P2-11)
+  const [showChart, setShowChart] = useState(false);
+  const [chartType, setChartType] = useState<'bar' | 'scatter'>('bar');
+  const [scatterX, setScatterX] = useState<string>('');
+  const [scatterY, setScatterY] = useState<string>('');
+  const chartRef = useRef<HTMLDivElement>(null);
 
   // Close export dropdown on outside click
   useEffect(() => {
@@ -123,6 +136,143 @@ const ComparisonPage: React.FC = () => {
     } catch (err) {
       showToast('导出失败', 'error');
     }
+  };
+
+  // --- P2-10: LaTeX one-click copy ---
+  const generateLatexCode = (): string => {
+    if (!compData) return '';
+    const { columns, rows, quality_warnings } = compData;
+
+    // Filter out non-data columns for a clean table
+    const dataCols = columns.filter(c => c !== 'DOI');
+    const colFormat = dataCols.map(() => 'c').join('');
+    const latexCols = dataCols.join(' & ');
+
+    const escapeLatex = (s: string) =>
+      s.replace(/\\/g, '\\textbackslash{}')
+       .replace(/&/g, '\\&')
+       .replace(/%/g, '\\%')
+       .replace(/\$/g, '\\$')
+       .replace(/#/g, '\\#')
+       .replace(/_/g, '\\_')
+       .replace(/\{/g, '\\{')
+       .replace(/\}/g, '\\}')
+       .replace(/~/g, '\\textasciitilde{}')
+       .replace(/\^/g, '\\textasciicircum{}');
+
+    const tableRows = rows.map((row) => {
+      const doi = String(row['DOI'] || '');
+      return dataCols.map((col) => {
+        const val = String(row[col] || '');
+        const warning = quality_warnings?.[doi]?.[col];
+        const cell = escapeLatex(val === '' || val === 'N/A' || val === 'undefined' ? '—' : val);
+        return warning ? `${cell}\\textsuperscript{${warning.severity === 'missing' ? 'b' : 'a'}}` : cell;
+      }).join(' & ');
+    }).join(' \\\\\n');
+
+    // Build table notes from quality warnings
+    const notes: string[] = [];
+    const hasWarnings = Object.values(quality_warnings || {}).some(
+      (fields) => Object.values(fields).some((w) => w.severity === 'warning')
+    );
+    const hasMissing = Object.values(quality_warnings || {}).some(
+      (fields) => Object.values(fields).some((w) => w.severity === 'missing')
+    );
+    if (hasWarnings) notes.push('\\item[a] Quality warning: data may be unreliable');
+    if (hasMissing) notes.push('\\item[b] Data missing or unavailable');
+
+    const notesBlock = notes.length > 0
+      ? `\n\\begin{tablenotes}\n\\small\n${notes.join('\n')}\n\\end{tablenotes}`
+      : '';
+
+    return `\\begin{table}[htbp]
+\\centering
+\\caption{Comparison of perovskite device performance metrics}
+\\label{tab:comparison}
+\\begin{threeparttable}
+\\begin{tabular}{l${colFormat}}
+\\toprule
+${latexCols} \\\\
+\\midrule
+${tableRows} \\\\
+\\bottomrule
+\\end{tabular}${notesBlock}
+\\end{threeparttable}
+\\end{table}`;
+  };
+
+  const handleCopyLatex = async () => {
+    setExportOpen(false);
+    try {
+      const latex = generateLatexCode();
+      await navigator.clipboard.writeText(latex);
+      showToast('LaTeX 代码已复制到剪贴板', 'success');
+    } catch {
+      showToast('复制失败，请手动复制', 'error');
+    }
+  };
+
+  // --- P2-11: Chart helpers ---
+  const getNumericColumns = (): string[] => {
+    if (!compData) return [];
+    return columns.filter((col) => {
+      if (['DOI', 'Title', 'Structure', 'Composition'].includes(col)) return false;
+      return rows.some((r) => {
+        const val = parseFloat(String(r[col]));
+        return !isNaN(val) && val !== 0;
+      });
+    });
+  };
+
+  const getBarChartData = () => {
+    return rows.map((row) => {
+      const entry: Record<string, string | number> = {
+        name: String(row['Title'] || row['DOI'] || '').substring(0, 25),
+      };
+      getNumericColumns().forEach((col) => {
+        const val = parseFloat(String(row[col]));
+        entry[col] = isNaN(val) ? 0 : val;
+      });
+      return entry;
+    });
+  };
+
+  const getScatterChartData = () => {
+    return rows.map((row) => {
+      const xVal = parseFloat(String(row[scatterX]));
+      const yVal = parseFloat(String(row[scatterY]));
+      return {
+        x: isNaN(xVal) ? 0 : xVal,
+        y: isNaN(yVal) ? 0 : yVal,
+        name: String(row['Title'] || row['DOI'] || '').substring(0, 30),
+      };
+    }).filter((d) => d.x !== 0 || d.y !== 0);
+  };
+
+  const exportChartImage = () => {
+    const svg = chartRef.current?.querySelector('svg');
+    if (!svg) { showToast('未找到图表', 'error'); return; }
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width * 2;
+      canvas.height = img.height * 2;
+      if (ctx) {
+        ctx.scale(2, 2);
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+      }
+      canvas.toBlob((blob) => {
+        if (blob) {
+          compareApi.downloadBlob(blob, `comparison-${chartType}-chart.png`);
+          showToast('图表已导出为 PNG', 'success');
+        }
+      });
+    };
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
   };
 
   // Check quality warnings for a cell
@@ -323,6 +473,16 @@ const ComparisonPage: React.FC = () => {
                     <span>{opt.icon}</span> {opt.label}
                   </button>
                 ))}
+                {/* P2-10: LaTeX one-click copy */}
+                <div className="border-t border-white/5">
+                  <button
+                    type="button"
+                    onClick={handleCopyLatex}
+                    className="w-full text-left px-4 py-2.5 text-xs text-slate-300 hover:bg-white/5 hover:text-white transition-colors flex items-center gap-2"
+                  >
+                    <span>📋</span> 复制 LaTeX
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -619,6 +779,151 @@ const ComparisonPage: React.FC = () => {
         </tbody>
         </table>
         </div>
+
+        {/* P2-11: Chart preview section */}
+        {compData && rows.length > 0 && (
+          <div className="mt-4 border-t border-white/5">
+            <div className="flex items-center justify-between px-4 py-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowChart(!showChart); setChartType('bar'); }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    showChart && chartType === 'bar'
+                      ? 'bg-brand-500/20 text-brand-400 border border-brand-500/30'
+                      : 'bg-white/5 border border-white/10 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  📊 条形图
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowChart(!showChart); setChartType('scatter'); }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    showChart && chartType === 'scatter'
+                      ? 'bg-brand-500/20 text-brand-400 border border-brand-500/30'
+                      : 'bg-white/5 border border-white/10 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  📈 散点图
+                </button>
+              </div>
+              {showChart && (
+                <button
+                  type="button"
+                  onClick={exportChartImage}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/5 border border-white/10 text-slate-400 hover:text-white transition-all"
+                >
+                  🖼️ 导出图片
+                </button>
+              )}
+            </div>
+
+            {showChart && (
+              <div ref={chartRef} className="px-4 pb-4">
+                {chartType === 'bar' ? (
+                  <div className="bg-slate-900/40 rounded-2xl p-4">
+                    <ResponsiveContainer width="100%" height={320}>
+                      <BarChart data={getBarChartData()} margin={{ top: 10, right: 20, bottom: 60, left: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                        <XAxis
+                          dataKey="name"
+                          tick={{ fill: '#94a3b8', fontSize: 10 }}
+                          angle={-35}
+                          textAnchor="end"
+                          interval={0}
+                          height={60}
+                        />
+                        <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                        <Tooltip
+                          contentStyle={{ background: '#1e293b', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', fontSize: 12 }}
+                          labelStyle={{ color: '#e2e8f0' }}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                        {getNumericColumns().map((col, i) => (
+                          <Bar key={col} dataKey={col} fill={CHART_COLORS[i % CHART_COLORS.length]} radius={[4, 4, 0, 0]} />
+                        ))}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <div className="bg-slate-900/40 rounded-2xl p-4">
+                    {/* Scatter axis selectors */}
+                    <div className="flex items-center gap-4 mb-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase">X 轴</span>
+                        <select
+                          title="X轴指标"
+                          value={scatterX}
+                          onChange={(e) => setScatterX(e.target.value)}
+                          className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none"
+                        >
+                          <option value="">选择指标</option>
+                          {getNumericColumns().map((col) => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase">Y 轴</span>
+                        <select
+                          title="Y轴指标"
+                          value={scatterY}
+                          onChange={(e) => setScatterY(e.target.value)}
+                          className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none"
+                        >
+                          <option value="">选择指标</option>
+                          {getNumericColumns().map((col) => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    {scatterX && scatterY ? (
+                      <ResponsiveContainer width="100%" height={320}>
+                        <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                          <XAxis
+                            type="number"
+                            dataKey="x"
+                            name={scatterX}
+                            tick={{ fill: '#94a3b8', fontSize: 11 }}
+                            label={{ value: scatterX, position: 'bottom', fill: '#64748b', fontSize: 11 }}
+                          />
+                          <YAxis
+                            type="number"
+                            dataKey="y"
+                            name={scatterY}
+                            tick={{ fill: '#94a3b8', fontSize: 11 }}
+                            label={{ value: scatterY, angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 11 }}
+                          />
+                          <Tooltip
+                            contentStyle={{ background: '#1e293b', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', fontSize: 12 }}
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            formatter={(_val: any, _name: any, props: any) => [props?.payload?.name || '']}
+                            labelFormatter={() => ''}
+                          />
+                          <Scatter
+                            data={getScatterChartData()}
+                            fill="#6366f1"
+                          >
+                            {getScatterChartData().map((_entry, i) => (
+                              <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                            ))}
+                          </Scatter>
+                        </ScatterChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="flex items-center justify-center h-[200px] text-slate-500 text-sm">
+                        请选择 X 轴和 Y 轴指标
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

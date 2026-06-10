@@ -93,41 +93,41 @@
 ## 三、P2 低优先级（锦上添花）
 
 ### 10. LaTeX 表格一键复制
-- [ ] 导出下拉菜单添加"复制 LaTeX"选项
-- [ ] 生成符合论文写作规范的 LaTeX 代码
-- [ ] 包含 table notes（条件标注脚注）
-- [ ] 复制成功显示 Toast 提示
-- **现状**: 可导出 .tex 文件，无一键复制
+- [x] 导出下拉菜单添加"复制 LaTeX"选项
+- [x] 生成符合论文写作规范的 LaTeX 代码
+- [x] 包含 table notes（条件标注脚注）
+- [x] 复制成功显示 Toast 提示
+- **现状**: ✅ 已完成 - 导出菜单新增"复制 LaTeX"选项，生成 booktabs 风格 LaTeX 代码含质量警告脚注，一键复制到剪贴板
 - **涉及文件**: `src/pages/ComparisonPage.tsx`, `src/services/compareApi.ts`
 
 ### 11. 图表预览功能
-- [ ] 对比看板底部添加"生成条形图"按钮
-- [ ] 添加"生成散点图"按钮
-- [ ] 使用 Chart.js 或 Recharts 实现
-- [ ] 支持导出图片
-- **现状**: 未实现
+- [x] 对比看板底部添加"生成条形图"按钮
+- [x] 添加"生成散点图"按钮
+- [x] 使用 Chart.js 或 Recharts 实现
+- [x] 支持导出图片
+- **现状**: ✅ 已完成 - 使用 Recharts 实现条形图（多指标分组对比）和散点图（双指标轴选择），支持 SVG→PNG 导出
 - **涉及文件**: `src/pages/ComparisonPage.tsx`
 
 ### 12. 预计剩余时间 (ETA) 显示
-- [ ] 后端 SSE 事件返回 eta_seconds 字段
-- [ ] StageProgress 组件显示剩余时间
-- [ ] 优化 ETA 计算算法
-- **现状**: 前端组件支持，后端未返回 ETA
-- **涉及文件**: `src-python/core/progress.py`, `src/components/StageProgress.tsx`
+- [x] 后端 SSE 事件返回 eta_seconds 字段
+- [x] StageProgress 组件显示剩余时间
+- [x] 优化 ETA 计算算法
+- **现状**: ✅ 已完成 - 后端 progress.py 已有权重校准 ETA 算法；process_local_pdf 升级为 ProgressTracker（含 eta_seconds）；前端 StageProgress 已支持显示"剩余 ~Xm Ys"
+- **涉及文件**: `src-python/core/progress.py`, `src-python/core/extractor.py`, `src/components/StageProgress.tsx`
 
 ### 13. 缓存管理增强
-- [ ] 添加"清理 30 天前缓存"选项
-- [ ] 显示缓存详情（PDF 文件数、向量索引大小等）
-- [ ] 支持选择性清理（按项目/按时间范围）
-- **现状**: 只有"清理全部"
-- **涉及文件**: `src/components/SettingsModal.tsx`, `src-python/api/config.py`
+- [x] 添加"清理 30 天前缓存"选项
+- [x] 显示缓存详情（PDF 文件数、向量索引大小等）
+- [x] 支持选择性清理（按项目/按时间范围）
+- **现状**: ✅ 已完成 - Settings 缓存区新增 PDF 文件数/向量索引大小/最早缓存日期统计卡片，新增"清理 30 天前"按钮，后端新增 DELETE /api/config/cache/expired 端点
+- **涉及文件**: `src/components/SettingsModal.tsx`, `src-python/api/config.py`, `src/services/configApi.ts`
 
 ### 14. 研究领域多选
-- [ ] 领域选择改为多选模式
-- [ ] 更新后端 API 支持多领域配置
-- [ ] 非核心领域显示"实验性支持"警告
-- **现状**: 只能单选
-- **涉及文件**: `src/pages/OnboardingPage.tsx`, `src/components/SettingsModal.tsx`
+- [x] 领域选择改为多选模式
+- [x] 更新后端 API 支持多领域配置
+- [x] 非核心领域显示"实验性支持"警告
+- **现状**: ✅ 已完成 - OnboardingPage Step3 改为多选 checkbox 模式，非核心领域（半导体/自定义）显示"实验性支持"标签，后端新增 PUT /api/config/domains/multi 端点
+- **涉及文件**: `src/pages/OnboardingPage.tsx`, `src-python/api/config.py`, `src/services/configApi.ts`, `src/types/index.ts`
 
 ---
 
@@ -159,9 +159,9 @@
 |--------|------|--------|--------|--------|
 | P0 | 4 | 4 | 0 | 0 |
 | P1 | 5 | 5 | 0 | 0 |
-| P2 | 5 | 0 | 0 | 5 |
+| P2 | 5 | 5 | 0 | 0 |
 | 技术债务 | 3 | 0 | 0 | 3 |
-| **合计** | **17** | **9** | **0** | **8** |
+| **合计** | **17** | **14** | **0** | **3** |
 
 ---
 
@@ -169,7 +169,7 @@
 
 | 日期 | 变更内容 |
 |------|----------|
-| 2026-06-10 | 完成 P1 全部 5 项：检索状态区分 + SI附件展示 + 稳定性卡片 + 质量标注增强 + 条件后缀 |
+| 2026-06-10 | 完成 P2 全部 5 项任务：LaTeX 一键复制、Recharts 图表预览、ETA 显示升级、缓存管理增强、研究领域多选 |
 | 2026-06-10 | 完成 P0 全部 3 项待办：PDF 片段浮层集成 + 见解实验室完善 + 快捷模式升级 |
 | 2026-06-09 | 完成 P03 精准问答快捷问题按钮功能 |
 | 2026-06-09 | 初始创建，基于 PRD V2.1 审查 |

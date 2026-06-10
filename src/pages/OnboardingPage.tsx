@@ -28,8 +28,8 @@ const OnboardingPage: React.FC = () => {
   const [proxyUrl, setProxyUrl] = useState('');
   const [cookieHeader, setCookieHeader] = useState('');
 
-  // Step 3: Domain
-  const [domain, setDomain] = useState<'perovskite' | 'semiconductor' | 'custom'>('perovskite');
+  // Step 3: Domain — multi-select (P2-14)
+  const [domains, setDomains] = useState<string[]>(['perovskite']);
 
   // Embedding status
   const [embeddingStatus, setEmbeddingStatus] = useState<string>('not_installed');
@@ -95,10 +95,14 @@ const OnboardingPage: React.FC = () => {
   };
 
   const handleStep3 = async () => {
+    if (domains.length === 0) {
+      setError('请至少选择一个研究领域');
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      await configApi.updateDomains(domain);
+      await configApi.updateDomainsMulti(domains);
       setNeedsOnboarding(false);
       navigate('/home', { replace: true });
     } catch (err: unknown) {
@@ -360,26 +364,58 @@ const OnboardingPage: React.FC = () => {
 
           {step === 3 && (
             <div className="space-y-5">
-              <p className="text-sm text-slate-400 mb-4">选择你的研究方向，SIA 将优化提取策略</p>
+              <p className="text-sm text-slate-400 mb-4">选择你的研究方向（可多选），SIA 将优化提取策略</p>
               {([
-                { id: 'perovskite' as const, label: '钙钛矿太阳能电池', desc: 'PCE/Voc/Jsc/FF 提取，组分识别，SI 解析' },
-                { id: 'semiconductor' as const, label: '半导体器件', desc: '电学性能，I-V 曲线，迁移率提取' },
-                { id: 'custom' as const, label: '自定义领域', desc: '手动配置提取 Schema' },
-              ]).map((d) => (
-                <button
-                  key={d.id}
-                  type="button"
-                  onClick={() => setDomain(d.id)}
-                  className={`w-full text-left p-4 rounded-xl border transition-all ${
-                    domain === d.id
-                      ? 'bg-brand-500/10 border-brand-500/30 text-white'
-                      : 'bg-white/5 border-white/10 text-slate-300 hover:border-white/20'
-                  }`}
-                >
-                  <div className="font-bold text-sm mb-1">{d.label}</div>
-                  <div className="text-[11px] text-slate-500">{d.desc}</div>
-                </button>
-              ))}
+                { id: 'perovskite', label: '钙钛矿太阳能电池', desc: 'PCE/Voc/Jsc/FF 提取，组分识别，SI 解析', experimental: false },
+                { id: 'semiconductor', label: '半导体器件', desc: '电学性能，I-V 曲线，迁移率提取', experimental: true },
+                { id: 'custom', label: '自定义领域', desc: '手动配置提取 Schema', experimental: true },
+              ]).map((d) => {
+                const isSelected = domains.includes(d.id);
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => {
+                      setDomains((prev) =>
+                        isSelected
+                          ? prev.filter((x) => x !== d.id)
+                          : [...prev, d.id]
+                      );
+                    }}
+                    className={`w-full text-left p-4 rounded-xl border transition-all ${
+                      isSelected
+                        ? 'bg-brand-500/10 border-brand-500/30 text-white'
+                        : 'bg-white/5 border-white/10 text-slate-300 hover:border-white/20'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      {/* Checkbox indicator */}
+                      <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${
+                        isSelected
+                          ? 'bg-brand-500 border-brand-500'
+                          : 'border-slate-600'
+                      }`}>
+                        {isSelected && (
+                          <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm">{d.label}</span>
+                          {d.experimental && (
+                            <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded">
+                              实验性支持
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">{d.desc}</div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
 
               {/* Embedding status */}
               <div className="mt-6 pt-4 border-t border-white/5">

@@ -3,6 +3,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 from typing import Optional
+import datetime
 import os
 
 from core.security import encrypt_settings, decrypt_settings
@@ -35,6 +36,14 @@ class ProxyConfig(BaseModel):
 
 class DomainConfig(BaseModel):
     domain: str = "perovskite"  # perovskite / semiconductor / custom
+
+
+class DomainsMultiConfig(BaseModel):
+    domains: list[str] = ["perovskite"]  # multi-select support (P2-14)
+
+
+class CacheCleanupRequest(BaseModel):
+    older_than_days: int = 30  # P2-13: cleanup files older than N days
 
 
 # --- Endpoints ---
@@ -206,6 +215,25 @@ async def update_domains(config: DomainConfig):
     return {"success": True, "data": {"message": "Domains updated", "domain": config.domain}}
 
 
+@router.put("/domains/multi")
+async def update_domains_multi(config: DomainsMultiConfig):
+    """Update domain selection with multi-select support (P2-14)."""
+    valid_domains = {"perovskite", "semiconductor", "custom"}
+    for d in config.domains:
+        if d not in valid_domains:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid domain: {d}. Must be one of: {', '.join(valid_domains)}",
+            )
+    settings = decrypt_settings()
+    settings["domains"] = config.domains
+    # Keep legacy single-domain field in sync (first selected domain)
+    if config.domains:
+        settings["domain"] = config.domains[0]
+    encrypt_settings(settings)
+    return {"success": True, "data": {"message": "Domains updated", "domains": config.domains}}
+
+
 @router.post("/embedding/verify")
 async def verify_embedding():
     """Verify embedding model integrity."""
@@ -232,7 +260,7 @@ async def verify_embedding():
 
 @router.get("/cache")
 async def get_cache_stats():
-    """Get cache statistics."""
+    """Get cache statistics with detailed breakdown (P2-13 enhanced)."""
     sia_dir = os.path.join(
         os.environ.get("APPDATA", os.path.expanduser("~")), "SIA"
     )
@@ -245,14 +273,39 @@ async def get_cache_stats():
         db.close()
 
     cache_size_mb = 0.0
+    pdf_count = 0
+    oldest_file_date = None
     downloads_dir = os.path.join(sia_dir, "downloads")
+
     if os.path.exists(downloads_dir):
-        total_bytes = sum(
-            os.path.getsize(os.path.join(dirpath, filename))
-            for dirpath, _, filenames in os.walk(downloads_dir)
-            for filename in filenames
-        )
+        total_bytes = 0
+        oldest_mtime = None
+        for dirpath, _, filenames in os.walk(downloads_dir):
+            for filename in filenames:
+                filepath = os.path.join(dirpath, filename)
+                try:
+                    total_bytes += os.path.getsize(filepath)
+                    if filename.lower().endswith('.pdf'):
+                        pdf_count += 1
+                    mtime = os.path.getmtime(filepath)
+                    if oldest_mtime is None or mtime < oldest_mtime:
+                        oldest_mtime = mtime
+                except OSError:
+                    continue
         cache_size_mb = round(total_bytes / (1024 * 1024), 1)
+        if oldest_mtime:
+            oldest_file_date = datetime.datetime.fromtimestamp(oldest_mtime).isoformat()
+
+    # Vector index size
+    index_size_mb = 0.0
+    index_dir = os.path.join(sia_dir, "faiss_index")
+    if os.path.exists(index_dir):
+        idx_bytes = sum(
+            os.path.getsize(os.path.join(dp, f))
+            for dp, _, fns in os.walk(index_dir)
+            for f in fns
+        )
+        index_size_mb = round(idx_bytes / (1024 * 1024), 1)
 
     return {
         "success": True,
@@ -260,6 +313,9 @@ async def get_cache_stats():
             "total_papers": total_papers,
             "extracted_count": extracted_count,
             "cache_size_mb": cache_size_mb,
+            "pdf_count": pdf_count,
+            "oldest_file_date": oldest_file_date,
+            "index_size_mb": index_size_mb,
         },
     }
 
@@ -279,6 +335,45 @@ async def clear_cache():
         os.makedirs(downloads_dir, exist_ok=True)
 
     return {"success": True, "data": {"message": "Cache cleared"}}
+
+
+@router.delete("/cache/expired")
+async def clear_expired_cache(req: CacheCleanupRequest):
+    """P2-13: Clear cached files older than N days (keeps database records)."""
+    import time
+
+    sia_dir = os.path.join(
+        os.environ.get("APPDATA", os.path.expanduser("~")), "SIA"
+    )
+    downloads_dir = os.path.join(sia_dir, "downloads")
+    cutoff = time.time() - (req.older_than_days * 86400)
+    removed = 0
+
+    if os.path.exists(downloads_dir):
+        for dirpath, _, filenames in os.walk(downloads_dir):
+            for filename in filenames:
+                filepath = os.path.join(dirpath, filename)
+                try:
+                    if os.path.getmtime(filepath) < cutoff:
+                        os.remove(filepath)
+                        removed += 1
+                except OSError:
+                    continue
+        # Remove empty directories
+        for dirpath, dirnames, filenames in os.walk(downloads_dir, topdown=False):
+            if not dirnames and not filenames:
+                try:
+                    os.rmdir(dirpath)
+                except OSError:
+                    pass
+
+    return {
+        "success": True,
+        "data": {
+            "message": f"Removed {removed} files older than {req.older_than_days} days",
+            "removed_count": removed,
+        },
+    }
 
 
 # ============================================================

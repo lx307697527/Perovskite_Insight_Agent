@@ -337,13 +337,24 @@ class PaperExtractor:
         If doi is provided, saves extraction results to DB so the details page
         can reflect the updated state.
         """
+        task_id = doi or f"local_{os.path.basename(file_path)}"
+        tracker = create_tracker(task_id)
+        tracker.define_stages([
+            ("parsing", 0.3, "解析文档"),
+            ("extracting", 0.6, "AI 提取数据"),
+            ("saving", 0.1, "保存结果"),
+        ])
+
         db = SessionLocal()
         try:
             filename = os.path.basename(file_path)
             logger.info(f"Starting local PDF processing for: {filename}")
-            yield {"status": "parsing", "progress": 20, "timestamp": datetime.datetime.now().isoformat()}
 
             # 1. Parse PDF
+            tracker.start()
+            tracker.advance("parsing")
+            yield {"status": "parsing", "progress": tracker.get_progress(), "timestamp": datetime.datetime.now().isoformat()}
+
             markdown_content = await pdf_processor.convert_to_markdown(file_path)
 
             if not markdown_content:
@@ -354,9 +365,10 @@ class PaperExtractor:
             cache_key = doi or f"local_{os.path.splitext(filename)[0]}"
             self._save_markdown_cache(cache_key, markdown_content, "main")
 
-            yield {"status": "extracting", "progress": 50, "timestamp": datetime.datetime.now().isoformat()}
-
             # 2. AI Extraction — use smart content preparation
+            tracker.advance("extracting")
+            yield {"status": "extracting", "progress": tracker.get_progress(), "timestamp": datetime.datetime.now().isoformat()}
+
             main_content = self._prepare_main_content(markdown_content)
             ai_data = await self._ai_extract(main_content, PEROVSKITE_EXTRACTOR_PROMPT)
 
@@ -419,7 +431,7 @@ class PaperExtractor:
                     db.rollback()
                     logger.error(f"Failed to save local PDF extraction to DB for {doi}: {e}")
 
-            yield {"status": "completed", "result": {
+            yield {"status": "completed", "progress": tracker.get_completed_event(), "result": {
                 "doi": doi or ai_data.get("doi", "local_file"),
                 "title": filename,
                 "device_type": ai_data.get("device_type", "solar_cell"),
