@@ -5,9 +5,21 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SIA — Sci-Insight Agent</title>
+    <!-- 预连接但异步加载字体，不阻塞渲染 -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+      /* 关键 CSS 内联，确保首屏立即渲染 */
+      body {
+        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+        margin: 0;
+        min-height: 100vh;
+      }
+      #root {
+        min-height: 100vh;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

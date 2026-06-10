@@ -4,6 +4,18 @@
   "description": "Capability for the main window",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "shell:allow-spawn",
+    "shell:allow-execute",
+    "shell:allow-kill",
+    {
+      "identifier": "shell:allow-open",
+      "allow": [
+        {
+          "path": "$RESOURCE/**",
+          "sidecar": true
+        }
+      ]
+    }
   ]
 }
