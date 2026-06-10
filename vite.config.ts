@@ -19,8 +19,8 @@ export default defineConfig({
   optimizeDeps: {
     include: [
       'react-window',
+      'es-toolkit',
+      'es-toolkit/compat',
     ],
-    // 排除有问题的 es-toolkit，让 recharts 自己处理
-    exclude: ['es-toolkit', 'es-toolkit/compat'],
   },
 })
